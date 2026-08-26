@@ -16,6 +16,12 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Drawing
 
+$captureHelperPath = Join-Path $PSScriptRoot "capture_helper.dll"
+if (-not (Test-Path -LiteralPath $captureHelperPath -PathType Leaf)) {
+    throw "Embedded Windows capture helper not found: $captureHelperPath"
+}
+[void][System.Reflection.Assembly]::LoadFrom($captureHelperPath)
+
 $win32Source = @"
 using System;
 using System.Collections.Generic;
@@ -102,6 +108,30 @@ public static class OCUWin32 {
     [DllImport("user32.dll")]
     public static extern bool IsIconic(IntPtr hWnd);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetThreadDpiAwarenessContext();
+
+    [DllImport("user32.dll")]
+    private static extern bool AreDpiAwarenessContextsEqual(IntPtr first, IntPtr second);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetDpiForWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
+
+    [DllImport("shcore.dll")]
+    private static extern int GetDpiForMonitor(IntPtr monitor, int dpiType, out uint dpiX, out uint dpiY);
+
+    [DllImport("user32.dll")]
+    public static extern int GetSystemMetrics(int index);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint flags);
+
     [DllImport("user32.dll")]
     public static extern IntPtr GetWindow(IntPtr hWnd, UInt32 command);
 
@@ -138,11 +168,39 @@ public static class OCUWin32 {
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SetCursorPos(int x, int y);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool GetCursorPos(out POINT point);
+
     [DllImport("user32.dll")]
     public static extern IntPtr WindowFromPoint(POINT point);
 
     [DllImport("user32.dll")]
     public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+
+    public static bool EnablePerMonitorV2DpiAwareness() {
+        try {
+            IntPtr perMonitorV2 = new IntPtr(-4);
+            SetProcessDpiAwarenessContext(perMonitorV2);
+            return AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(), perMonitorV2);
+        } catch (EntryPointNotFoundException) {
+            return false;
+        }
+    }
+
+    public static uint GetEffectiveMonitorDpi(IntPtr hWnd) {
+        try {
+            IntPtr monitor = MonitorFromWindow(hWnd, 2);
+            uint dpiX;
+            uint dpiY;
+            if (monitor != IntPtr.Zero && GetDpiForMonitor(monitor, 0, out dpiX, out dpiY) >= 0 && dpiX > 0) {
+                return dpiX;
+            }
+        } catch (DllNotFoundException) {
+        } catch (EntryPointNotFoundException) {
+        }
+        uint windowDpi = GetDpiForWindow(hWnd);
+        return windowDpi == 0 ? 96u : windowDpi;
+    }
 
     public static IntPtr[] EnumerateTopLevelWindows() {
         var handles = new List<IntPtr>();
@@ -195,8 +253,26 @@ public static class OCUWin32 {
         return root == IntPtr.Zero ? hit : root;
     }
 
+    private static void MoveCursorSmoothly(int x, int y) {
+        POINT start;
+        if (!GetCursorPos(out start)) {
+            if (!SetCursorPos(x, y)) throw new Win32Exception(Marshal.GetLastWin32Error(), "SetCursorPos failed");
+            return;
+        }
+        double distance = Math.Sqrt(Math.Pow(x - start.X, 2) + Math.Pow(y - start.Y, 2));
+        int steps = Math.Max(8, Math.Min(24, (int)Math.Ceiling(distance / 40.0)));
+        for (int i = 1; i <= steps; i++) {
+            double t = i / (double)steps;
+            double eased = t * t * (3.0 - (2.0 * t));
+            int nextX = start.X + (int)Math.Round((x - start.X) * eased);
+            int nextY = start.Y + (int)Math.Round((y - start.Y) * eased);
+            if (!SetCursorPos(nextX, nextY)) throw new Win32Exception(Marshal.GetLastWin32Error(), "SetCursorPos failed");
+            Thread.Sleep(8);
+        }
+    }
+
     public static void ClickAt(int x, int y, uint downFlag, uint upFlag, int count) {
-        if (!SetCursorPos(x, y)) throw new Win32Exception(Marshal.GetLastWin32Error(), "SetCursorPos failed");
+        MoveCursorSmoothly(x, y);
         int repeat = Math.Max(1, count);
         for (int i = 0; i < repeat; i++) {
             SendInputChecked(new[] { MouseInput(downFlag, 0), MouseInput(upFlag, 0) });
@@ -205,7 +281,7 @@ public static class OCUWin32 {
     }
 
     public static void DragTo(int fromX, int fromY, int toX, int toY) {
-        if (!SetCursorPos(fromX, fromY)) throw new Win32Exception(Marshal.GetLastWin32Error(), "SetCursorPos failed");
+        MoveCursorSmoothly(fromX, fromY);
         SendInputChecked(new[] { MouseInput(0x0002, 0) });
         for (int i = 1; i <= 12; i++) {
             int x = fromX + ((toX - fromX) * i / 12);
@@ -217,7 +293,7 @@ public static class OCUWin32 {
     }
 
     public static void WheelAt(int x, int y, int delta, bool horizontal) {
-        if (!SetCursorPos(x, y)) throw new Win32Exception(Marshal.GetLastWin32Error(), "SetCursorPos failed");
+        MoveCursorSmoothly(x, y);
         SendInputChecked(new[] { MouseInput(horizontal ? 0x1000u : 0x0800u, unchecked((uint)delta)) });
     }
 
@@ -260,8 +336,11 @@ if ($null -ne $addTypeFailure) {
     throw $addTypeFailure
 }
 
+$script:DpiAwarenessMode = if ([OCUWin32]::EnablePerMonitorV2DpiAwareness()) { "per-monitor-v2" } else { "unavailable" }
+
 $GW_OWNER = 4
 $SW_RESTORE = 9
+$PW_RENDERFULLCONTENT = 0x00000002
 
 $WM_SETTEXT = 0x000C
 $WM_MOUSEMOVE = 0x0200
@@ -309,6 +388,7 @@ function New-WindowRecord($process, [IntPtr]$hwnd, [IntPtr]$foregroundHwnd) {
         # while its owner is disabled, which is the normal Win32 dialog state.
         isModal = $owner -ne [IntPtr]::Zero -and -not [OCUWin32]::IsWindowEnabled($owner)
         isForeground = $hwnd -eq $foregroundHwnd
+        isMinimized = [OCUWin32]::IsIconic($hwnd)
         processStarted = $started
     }
 }
@@ -519,6 +599,32 @@ function Get-ScreenPoint($localFrame, $windowBounds) {
     [pscustomobject]@{
         x = [int][math]::Round($windowBounds.x + $localFrame.x + ($localFrame.width / 2))
         y = [int][math]::Round($windowBounds.y + $localFrame.y + ($localFrame.height / 2))
+    }
+}
+
+function Assert-WindowBoundsMatch($expected, $actual) {
+    if ($null -eq $expected -or $null -eq $actual) {
+        throw "stale_screenshot(window_bounds_unavailable)"
+    }
+    foreach ($name in @("x", "y", "width", "height")) {
+        if ([math]::Abs([double]$expected.$name - [double]$actual.$name) -gt 1.0) {
+            throw "stale_screenshot(window_bounds_changed expected=$($expected | ConvertTo-Json -Compress) actual=$($actual | ConvertTo-Json -Compress))"
+        }
+    }
+}
+
+function Convert-ScreenshotPoint([double]$x, [double]$y, $windowBounds, $capture, [string]$label) {
+    if ($null -eq $windowBounds -or $null -eq $capture -or [int]$capture.width -le 0 -or [int]$capture.height -le 0) {
+        throw "coordinate_mapping_unavailable($label)"
+    }
+    $captureWidth = [double]$capture.width
+    $captureHeight = [double]$capture.height
+    if ($x -lt 0 -or $y -lt 0 -or $x -ge $captureWidth -or $y -ge $captureHeight) {
+        throw "coordinate_out_of_bounds($label x=$x y=$y capture=${captureWidth}x${captureHeight})"
+    }
+    return [pscustomobject]@{
+        x = [int][math]::Round([double]$windowBounds.x + ($x * [double]$windowBounds.width / $captureWidth))
+        y = [int][math]::Round([double]$windowBounds.y + ($y * [double]$windowBounds.height / $captureHeight))
     }
 }
 
@@ -850,6 +956,9 @@ function Get-PatternNames($element) {
         elseif ($programmatic -like "ScrollPatternIdentifiers.Pattern") { $names.Add("Scroll") }
         elseif ($programmatic -like "ValuePatternIdentifiers.Pattern") { $names.Add("SetValue") }
     }
+    if ((Test-EnvFlagEnabled "OPEN_COMPUTER_USE_WINDOWS_ALLOW_FOCUS_ACTIONS") -and (Get-ElementBool $element "IsKeyboardFocusable")) {
+        $names.Add("SetFocus")
+    }
     if ($names.Count -gt 0) {
         return @($names | Select-Object -Unique)
     }
@@ -873,6 +982,14 @@ function Get-ElementInt64($element, [string]$propertyName) {
         return [int64]$element.Current.$propertyName
     } catch {
         return 0
+    }
+}
+
+function Get-ElementBool($element, [string]$propertyName) {
+    try {
+        return [bool]$element.Current.$propertyName
+    } catch {
+        return $false
     }
 }
 
@@ -923,6 +1040,9 @@ function Limit-Text([string]$Text, $TextLimit = $script:DefaultTextLimit) {
 }
 
 function Get-ElementValue($element, $TextLimit = $script:DefaultTextLimit) {
+    if (Get-ElementBool $element "IsPassword") {
+        return ""
+    }
     try {
         $valuePattern = $element.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern)
         $value = $valuePattern.Current.Value
@@ -940,6 +1060,12 @@ function Get-ElementRecord($element, [int]$index, $windowBounds, $TextLimit = $s
     $frame = Get-ElementFrame $element $windowBounds
     $runtimeId = @()
     try { $runtimeId = @($element.GetRuntimeId()) } catch {}
+    $isSelected = $false
+    try {
+        $selection = $element.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
+        $isSelected = [bool]$selection.Current.IsSelected
+    } catch {
+    }
     [pscustomobject]@{
         index = $index
         runtimeId = $runtimeId
@@ -952,6 +1078,12 @@ function Get-ElementRecord($element, [int]$index, $windowBounds, $TextLimit = $s
         nativeWindowHandle = Get-ElementInt64 $element "NativeWindowHandle"
         frame = $frame
         actions = @(Get-PatternNames $element)
+        isEnabled = Get-ElementBool $element "IsEnabled"
+        isOffscreen = Get-ElementBool $element "IsOffscreen"
+        isKeyboardFocusable = Get-ElementBool $element "IsKeyboardFocusable"
+        hasKeyboardFocus = Get-ElementBool $element "HasKeyboardFocus"
+        isSelected = $isSelected
+        isPassword = Get-ElementBool $element "IsPassword"
     }
 }
 
@@ -1032,23 +1164,169 @@ function Render-Tree($element, $windowBounds, $TextLimit = $script:DefaultTextLi
     }
 }
 
-function Capture-WindowPngBase64($bounds) {
-    if ($null -eq $bounds -or $bounds.width -le 0 -or $bounds.height -le 0) {
-        return $null
-    }
+function Convert-BitmapToPngBase64($bitmap) {
+    $stream = New-Object System.IO.MemoryStream
     try {
-        $bitmap = New-Object System.Drawing.Bitmap ([int][math]::Round($bounds.width)), ([int][math]::Round($bounds.height))
-        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-        $graphics.CopyFromScreen([int][math]::Round($bounds.x), [int][math]::Round($bounds.y), 0, 0, $bitmap.Size)
-        $stream = New-Object System.IO.MemoryStream
         $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-        $graphics.Dispose()
-        $bitmap.Dispose()
-        $bytes = $stream.ToArray()
+        return [Convert]::ToBase64String($stream.ToArray())
+    } finally {
         $stream.Dispose()
-        return [Convert]::ToBase64String($bytes)
+    }
+}
+
+function Test-BitmapHasVisualContent($bitmap) {
+    $reference = $null
+    for ($row = 0; $row -lt 12; $row++) {
+        $y = [int][math]::Min($bitmap.Height - 1, [math]::Floor(($row + 0.5) * $bitmap.Height / 12.0))
+        for ($column = 0; $column -lt 12; $column++) {
+            $x = [int][math]::Min($bitmap.Width - 1, [math]::Floor(($column + 0.5) * $bitmap.Width / 12.0))
+            $value = $bitmap.GetPixel($x, $y).ToArgb()
+            if ($null -eq $reference) {
+                $reference = $value
+            } elseif ($value -ne $reference) {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+function New-CaptureDescriptor(
+    [string]$method,
+    $bounds,
+    [int]$width,
+    [int]$height,
+    [bool]$occlusionIndependent,
+    [bool]$diagnosticFallback,
+    [string]$warning,
+    [IntPtr]$hwnd
+) {
+    $windowDpi = 96
+    $dpi = 96
+    try {
+        $reportedWindowDpi = [int][OCUWin32]::GetDpiForWindow($hwnd)
+        if ($reportedWindowDpi -gt 0) { $windowDpi = $reportedWindowDpi }
+        $reportedDpi = [int][OCUWin32]::GetEffectiveMonitorDpi($hwnd)
+        if ($reportedDpi -gt 0) { $dpi = $reportedDpi }
     } catch {
-        return $null
+    }
+    $originX = if ($null -eq $bounds) { 0 } else { [double]$bounds.x }
+    $originY = if ($null -eq $bounds) { 0 } else { [double]$bounds.y }
+    $virtualScreen = New-Frame ([OCUWin32]::GetSystemMetrics(76)) ([OCUWin32]::GetSystemMetrics(77)) ([OCUWin32]::GetSystemMetrics(78)) ([OCUWin32]::GetSystemMetrics(79))
+    return [pscustomobject]@{
+        method = $method
+        originX = $originX
+        originY = $originY
+        width = $width
+        height = $height
+        occlusionIndependent = $occlusionIndependent
+        diagnosticFallback = $diagnosticFallback
+        warning = $warning
+        dpi = $dpi
+        windowDpi = $windowDpi
+        scaleFactor = [double]$dpi / 96.0
+        coordinateSpace = "physical-screen-pixels"
+        dpiAwareness = $script:DpiAwarenessMode
+        virtualScreen = $virtualScreen
+    }
+}
+
+function Capture-WindowsGraphicsPng([IntPtr]$hwnd, $bounds) {
+    if (-not [OCUWindowsGraphicsCapture]::IsSupported()) {
+        throw "Windows.Graphics.Capture is not supported by this Windows build"
+    }
+    $result = [OCUWindowsGraphicsCapture]::CaptureWindow($hwnd.ToInt64(), 3000)
+    if ($null -eq $result -or $null -eq $result.PngBytes -or $result.PngBytes.Length -eq 0) {
+        throw "Windows.Graphics.Capture returned an empty PNG"
+    }
+    return [pscustomobject]@{
+        pngBase64 = [Convert]::ToBase64String($result.PngBytes)
+        descriptor = New-CaptureDescriptor "windows-graphics-capture" $bounds ([int]$result.Width) ([int]$result.Height) $true $false "" $hwnd
+    }
+}
+
+function Add-CaptureWarning([string]$existing, [string]$next) {
+    if ([string]::IsNullOrWhiteSpace($existing)) {
+        return $next
+    }
+    return "$existing; $next"
+}
+
+function Capture-WindowPng([IntPtr]$hwnd, $bounds) {
+    if ($null -eq $bounds -or $bounds.width -le 0 -or $bounds.height -le 0) {
+        return [pscustomobject]@{
+            pngBase64 = $null
+            descriptor = New-CaptureDescriptor "unavailable" $null 0 0 $false $false "invalid_window_bounds" $hwnd
+        }
+    }
+    $width = [int][math]::Round($bounds.width)
+    $height = [int][math]::Round($bounds.height)
+    $warning = ""
+
+    if ($hwnd -ne [IntPtr]::Zero -and [OCUWin32]::IsIconic($hwnd)) {
+        return [pscustomobject]@{
+            pngBase64 = $null
+            descriptor = New-CaptureDescriptor "unavailable" $bounds $width $height $false $false "window_minimized_activate_window_required" $hwnd
+        }
+    }
+
+    try {
+        $graphicsCapture = Capture-WindowsGraphicsPng $hwnd $bounds
+        if ($null -ne $graphicsCapture -and -not [string]::IsNullOrWhiteSpace($graphicsCapture.pngBase64)) {
+            return $graphicsCapture
+        }
+        $warning = Add-CaptureWarning $warning "windows_graphics_capture_empty"
+    } catch {
+        $warning = Add-CaptureWarning $warning "windows_graphics_capture_failed($($_.Exception.Message))"
+    }
+
+    if ($hwnd -ne [IntPtr]::Zero) {
+        $bitmap = New-Object System.Drawing.Bitmap $width, $height, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $hdc = [IntPtr]::Zero
+        try {
+            $hdc = $graphics.GetHdc()
+            if ([OCUWin32]::PrintWindow($hwnd, $hdc, [uint32]0)) {
+                if (Test-BitmapHasVisualContent $bitmap) {
+                    return [pscustomobject]@{
+                        pngBase64 = Convert-BitmapToPngBase64 $bitmap
+                        descriptor = New-CaptureDescriptor "print-window" $bounds $width $height $true $false "" $hwnd
+                    }
+                }
+                $warning = Add-CaptureWarning $warning "print_window_blank(flags=0; PW_RENDERFULLCONTENT unavailable for this surface)"
+            } else {
+                $warning = Add-CaptureWarning $warning "print_window_failed(win32=$([Runtime.InteropServices.Marshal]::GetLastWin32Error()))"
+            }
+        } catch {
+            $warning = Add-CaptureWarning $warning "print_window_failed($($_.Exception.Message))"
+        } finally {
+            if ($hdc -ne [IntPtr]::Zero) {
+                $graphics.ReleaseHdc($hdc)
+            }
+            $graphics.Dispose()
+            $bitmap.Dispose()
+        }
+    }
+
+    try {
+        $bitmap = New-Object System.Drawing.Bitmap $width, $height, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        try {
+            $graphics.CopyFromScreen([int][math]::Round($bounds.x), [int][math]::Round($bounds.y), 0, 0, $bitmap.Size)
+            return [pscustomobject]@{
+                pngBase64 = Convert-BitmapToPngBase64 $bitmap
+                descriptor = New-CaptureDescriptor "screen-copy-fallback" $bounds $width $height $false $true $warning $hwnd
+            }
+        } finally {
+            $graphics.Dispose()
+            $bitmap.Dispose()
+        }
+    } catch {
+        $fallbackError = $_.Exception.Message
+        return [pscustomobject]@{
+            pngBase64 = $null
+            descriptor = New-CaptureDescriptor "unavailable" $bounds $width $height $false $true "$warning; screen_copy_failed($fallbackError)" $hwnd
+        }
     }
 }
 
@@ -1085,6 +1363,55 @@ function Get-SelectedText($processId, $TextLimit = $script:DefaultTextLimit) {
     return $null
 }
 
+function Get-DocumentText($root, [int]$processId, $TextLimit = $script:DefaultTextLimit) {
+    $candidates = New-Object System.Collections.Generic.List[object]
+    try {
+        $focused = [Windows.Automation.AutomationElement]::FocusedElement
+        if ($null -ne $focused -and $focused.Current.ProcessId -eq $processId) {
+            $candidates.Add($focused)
+        }
+    } catch {
+    }
+    $candidates.Add($root)
+    foreach ($controlType in @([Windows.Automation.ControlType]::Document, [Windows.Automation.ControlType]::Edit)) {
+        try {
+            $condition = New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::ControlTypeProperty), $controlType
+            $candidate = $root.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
+            if ($null -ne $candidate) {
+                $candidates.Add($candidate)
+            }
+        } catch {
+        }
+    }
+    foreach ($element in $candidates) {
+        try {
+            $textPattern = $element.GetCurrentPattern([Windows.Automation.TextPattern]::Pattern)
+            $maxLength = if ($null -eq $TextLimit) { -1 } else { [int]$TextLimit + 1 }
+            $text = [string]$textPattern.DocumentRange.GetText($maxLength)
+            if (-not [string]::IsNullOrWhiteSpace($text)) {
+                return Limit-Text $text $TextLimit
+            }
+        } catch {
+        }
+    }
+    return $null
+}
+
+function Get-FocusedElementRecord([int]$processId, $windowBounds, $renderedRecords, $TextLimit = $script:DefaultTextLimit) {
+    $record = @($renderedRecords | Where-Object { $_.hasKeyboardFocus } | Select-Object -First 1)[0]
+    if ($null -ne $record) {
+        return $record
+    }
+    try {
+        $focused = [Windows.Automation.AutomationElement]::FocusedElement
+        if ($null -ne $focused -and $focused.Current.ProcessId -eq $processId) {
+            return Get-ElementRecord $focused -1 $windowBounds $TextLimit
+        }
+    } catch {
+    }
+    return $null
+}
+
 function Build-Snapshot([string]$query, $TextLimit = $script:DefaultTextLimit, [int]$MaxTreeNodes = $script:AccessibilityTreeMaxNodeCount, [int]$MaxTreeDepth = $script:AccessibilityTreeMaxDepth, $WindowRef = $null) {
     if ($null -ne $WindowRef) {
         $window = Resolve-WindowRef $WindowRef
@@ -1099,6 +1426,9 @@ function Build-Snapshot([string]$query, $TextLimit = $script:DefaultTextLimit, [
     }
     $bounds = Get-WindowBounds $hwnd $element
     $rendered = Render-Tree $element $bounds $TextLimit $MaxTreeNodes $MaxTreeDepth
+    $focusedElement = Get-FocusedElementRecord $process.Id $bounds $rendered.records $TextLimit
+    $selectedElements = @($rendered.records | Where-Object { $_.isSelected })
+    $capture = Capture-WindowPng $hwnd $bounds
     $snapshotID = ("{0}:{1}" -f $window.generation, [DateTime]::UtcNow.Ticks)
     [pscustomobject]@{
         app = [pscustomobject]@{
@@ -1111,10 +1441,14 @@ function Build-Snapshot([string]$query, $TextLimit = $script:DefaultTextLimit, [
         screenshotId = $snapshotID
         windowTitle = Limit-Text $window.title $TextLimit
         windowBounds = $bounds
-        screenshotPngBase64 = Capture-WindowPngBase64 $bounds
+        capture = $capture.descriptor
+        screenshotPngBase64 = $capture.pngBase64
         treeLines = @($rendered.lines)
         focusedSummary = Get-FocusedSummary $process.Id $TextLimit
+        focusedElement = $focusedElement
         selectedText = Get-SelectedText $process.Id $TextLimit
+        selectedElements = $selectedElements
+        documentText = Get-DocumentText $element $process.Id $TextLimit
         elements = @($rendered.records)
     }
 }
@@ -1161,14 +1495,19 @@ function Test-MutatingTool([string]$toolName) {
 function Resolve-ActionFailureStatus([string]$message) {
     if (
         $message -like "stale_window*" -or
+        $message -like "stale_screenshot*" -or
         $message -like "invalid_window_ref*" -or
         $message -like "foreground_not_acquired*" -or
+        $message -like "focus_not_acquired*" -or
         $message -like "focused_element_not_in_target*" -or
         $message -like "focused_element_unknown*" -or
         $message -like "occluded_by_non_target*" -or
+        $message -like "coordinate_mapping_unavailable*" -or
+        $message -like "coordinate_out_of_bounds*" -or
         $message -like "unknown element_index*" -or
         $message -like "Missing required argument:*" -or
         $message -like "Cannot set a value*" -or
+        $message -like "value_not_applied*" -or
         $message -like "click_method *" -or
         $message -like "Unsupported key:*"
     ) {
@@ -1199,6 +1538,31 @@ function Same-RuntimeId($left, $right) {
         }
     }
     return $true
+}
+
+function Set-ElementFocusVerified($element) {
+    if (-not (Test-EnvFlagEnabled "OPEN_COMPUTER_USE_WINDOWS_ALLOW_FOCUS_ACTIONS")) {
+        return $false
+    }
+    if ($null -eq $element -or -not (Get-ElementBool $element "IsKeyboardFocusable")) {
+        return $false
+    }
+    try {
+        $element.SetFocus()
+    } catch {
+        return $false
+    }
+    for ($attempt = 0; $attempt -lt 12; $attempt++) {
+        try {
+            $focused = [Windows.Automation.AutomationElement]::FocusedElement
+            if ($null -ne $focused -and (Same-RuntimeId @($focused.GetRuntimeId()) @($element.GetRuntimeId()))) {
+                return $true
+            }
+        } catch {
+        }
+        Start-Sleep -Milliseconds 25
+    }
+    return $false
 }
 
 function Get-AllElements($root) {
@@ -1264,14 +1628,8 @@ function Invoke-PreferredClick($element) {
         $toggle.Toggle()
         return $true
     }
-    if (Test-EnvFlagEnabled "OPEN_COMPUTER_USE_WINDOWS_ALLOW_FOCUS_ACTIONS") {
-        try {
-            if ($element.Current.IsKeyboardFocusable) {
-                $element.SetFocus()
-                return $true
-            }
-        } catch {
-        }
+    if (Set-ElementFocusVerified $element) {
+        return $true
     }
     return $false
 }
@@ -1306,7 +1664,9 @@ function Invoke-SecondaryAction($element, [string]$action) {
             if (-not (Test-EnvFlagEnabled "OPEN_COMPUTER_USE_WINDOWS_ALLOW_FOCUS_ACTIONS")) {
                 throw "SetFocus is disabled by default to avoid stealing user focus; set OPEN_COMPUTER_USE_WINDOWS_ALLOW_FOCUS_ACTIONS=1 to enable it."
             }
-            $element.SetFocus()
+            if (-not (Set-ElementFocusVerified $element)) {
+                throw "focus_not_acquired(element=$($operation.element.index))"
+            }
             return
         }
     }
@@ -1438,6 +1798,78 @@ function Invoke-TypeText($root, [int]$processId, [IntPtr]$topHwnd, [string]$text
     return $false
 }
 
+function Read-ElementTextForVerification($element) {
+    if ($null -eq $element -or (Get-ElementBool $element "IsPassword")) {
+        return [pscustomobject]@{ available = $false; value = "" }
+    }
+    $valuePattern = Get-CurrentPatternOrNull $element ([Windows.Automation.ValuePattern]::Pattern)
+    if ($null -ne $valuePattern) {
+        try {
+            return [pscustomobject]@{ available = $true; value = [string]$valuePattern.Current.Value }
+        } catch {
+        }
+    }
+    $textPattern = Get-CurrentPatternOrNull $element ([Windows.Automation.TextPattern]::Pattern)
+    if ($null -ne $textPattern) {
+        try {
+            return [pscustomobject]@{ available = $true; value = [string]$textPattern.DocumentRange.GetText(-1) }
+        } catch {
+        }
+    }
+    return [pscustomobject]@{ available = $false; value = "" }
+}
+
+function Set-ElementValueVerified($element, $root, [int]$processId, [IntPtr]$topHwnd, [string]$value) {
+    if ($null -eq $element) {
+        throw "Cannot set a value for an unknown element"
+    }
+    if (Get-ElementBool $element "IsPassword") {
+        throw "Cannot set a value for a password element through set_value"
+    }
+
+    $valuePattern = Get-CurrentPatternOrNull $element ([Windows.Automation.ValuePattern]::Pattern)
+    $setValueAttempted = $false
+    if ($null -ne $valuePattern -and -not $valuePattern.Current.IsReadOnly) {
+        try {
+            $setValueAttempted = $true
+            $valuePattern.SetValue($value)
+            for ($attempt = 0; $attempt -lt 12; $attempt++) {
+                $observed = Read-ElementTextForVerification $element
+                if ($observed.available -and $observed.value -ceq $value) {
+                    return "ValuePattern"
+                }
+                Start-Sleep -Milliseconds 25
+            }
+        } catch {
+        }
+    }
+
+    if (-not (Test-EnvFlagEnabled "OPEN_COMPUTER_USE_WINDOWS_ALLOW_UIA_TEXT_FALLBACK")) {
+        if ($setValueAttempted) {
+            throw "value_not_applied(element=$($operation.element.index))"
+        }
+        throw "Cannot set a value for an element that is not settable"
+    }
+    if (-not (Set-ElementFocusVerified $element)) {
+        throw "focus_not_acquired(element=$($operation.element.index))"
+    }
+
+    Send-ForegroundKey $topHwnd "ctrl+a"
+    Send-ForegroundText $topHwnd $processId $value
+    for ($attempt = 0; $attempt -lt 12; $attempt++) {
+        $observed = Read-ElementTextForVerification $element
+        if ($observed.available -and $observed.value -ceq $value) {
+            return "SendInput"
+        }
+        Start-Sleep -Milliseconds 25
+    }
+    $observed = Read-ElementTextForVerification $element
+    if ($observed.available) {
+        throw "value_not_applied(element=$($operation.element.index), actualLength=$($observed.value.Length), expectedLength=$($value.Length))"
+    }
+    throw "value_verification_unknown(element=$($operation.element.index))"
+}
+
 # Read the operation file as UTF-8 explicitly. Windows PowerShell 5.1's
 # Get-Content defaults to the system ANSI code page (e.g. GBK on Chinese
 # systems) for files without a BOM, which corrupts non-ASCII input such as
@@ -1472,8 +1904,13 @@ try {
         $root = $context.root
         $requestedWindowBounds = Get-OperationPropertyValue $operation "windowBounds"
         $windowBounds = if ($null -ne $requestedWindowBounds) { $requestedWindowBounds } else { $context.windowBounds }
+        $requestedCapture = Get-OperationPropertyValue $operation "capture"
         $element = $context.element
         $isWindowScoped = $null -ne (Get-OperationPropertyValue $operation "window")
+
+        if ($isWindowScoped -and $null -ne $requestedWindowBounds) {
+            Assert-WindowBoundsMatch $requestedWindowBounds $context.windowBounds
+        }
 
         switch ($operation.tool) {
             "click" {
@@ -1492,10 +1929,7 @@ try {
                     if ($null -ne $operation.element -and $null -ne $operation.element.frame) {
                         $point = Get-ScreenPoint $operation.element.frame $windowBounds
                     } else {
-                        $point = [pscustomobject]@{
-                            x = [int][math]::Round($windowBounds.x + [double]$operation.x)
-                            y = [int][math]::Round($windowBounds.y + [double]$operation.y)
-                        }
+                        $point = Convert-ScreenshotPoint ([double]$operation.x) ([double]$operation.y) $windowBounds $requestedCapture "click"
                     }
                     if ($isWindowScoped) {
                         Send-ForegroundMouseClick $hwnd $point.x $point.y $operation.mouse_button ([int]$operation.click_count)
@@ -1515,10 +1949,7 @@ try {
                         if ($null -ne $operation.element -and $null -ne $operation.element.frame) {
                             $point = Get-ScreenPoint $operation.element.frame $windowBounds
                         } else {
-                            $point = [pscustomobject]@{
-                                x = [int][math]::Round($windowBounds.x + [double]$operation.x)
-                                y = [int][math]::Round($windowBounds.y + [double]$operation.y)
-                            }
+                            $point = Convert-ScreenshotPoint ([double]$operation.x) ([double]$operation.y) $windowBounds $requestedCapture "click"
                         }
                         if ($isWindowScoped) {
                             Send-ForegroundMouseClick $hwnd $point.x $point.y $operation.mouse_button ([int]$operation.click_count)
@@ -1549,14 +1980,12 @@ try {
                 }
             }
             "drag" {
-                $fromX = [int][math]::Round($windowBounds.x + [double]$operation.from_x)
-                $fromY = [int][math]::Round($windowBounds.y + [double]$operation.from_y)
-                $toX = [int][math]::Round($windowBounds.x + [double]$operation.to_x)
-                $toY = [int][math]::Round($windowBounds.y + [double]$operation.to_y)
+                $from = Convert-ScreenshotPoint ([double]$operation.from_x) ([double]$operation.from_y) $windowBounds $requestedCapture "drag.from"
+                $to = Convert-ScreenshotPoint ([double]$operation.to_x) ([double]$operation.to_y) $windowBounds $requestedCapture "drag.to"
                 if ($isWindowScoped) {
-                    Send-ForegroundDrag $hwnd $fromX $fromY $toX $toY
+                    Send-ForegroundDrag $hwnd $from.x $from.y $to.x $to.y
                 } else {
-                    Send-Drag $hwnd $fromX $fromY $toX $toY
+                    Send-Drag $hwnd $from.x $from.y $to.x $to.y
                 }
             }
             "type_text" {
@@ -1575,11 +2004,7 @@ try {
             }
             "set_value" {
                 if ($null -eq $element) { throw "unknown element_index '$($operation.element.index)'" }
-                $valuePattern = Get-CurrentPatternOrNull $element ([Windows.Automation.ValuePattern]::Pattern)
-                if ($null -eq $valuePattern) {
-                    throw "Cannot set a value for an element that is not settable"
-                }
-                $valuePattern.SetValue($operation.value)
+                [void](Set-ElementValueVerified $element $root $process.Id $hwnd ([string]$operation.value))
             }
             default {
                 throw "unsupportedTool(`"$($operation.tool)`")"

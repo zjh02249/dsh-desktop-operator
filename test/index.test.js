@@ -30,6 +30,25 @@ function loadExportsUnderTest() {
   return context.result
 }
 
+function loadAccessGateUnderTest() {
+  const source = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  const functionStart = source.indexOf('function isComputerUseTool(toolName) {')
+  const functionEnd = source.indexOf('function installUseTracker(ctx, usedAgents) {')
+
+  assert.notEqual(functionStart, -1, 'isComputerUseTool definition should exist')
+  assert.notEqual(functionEnd, -1, 'installUseTracker definition should exist')
+
+  const snippet = [
+    'const COMPUTER_USE_TOOL_PREFIX = "mcp__computer_use__";',
+    source.slice(functionStart, functionEnd),
+    'result = { installAccessGate };',
+  ].join('\n')
+
+  const context = { result: undefined }
+  vm.runInNewContext(snippet, context)
+  return context.result
+}
+
 const {
   bundledRuntimeRelativePath,
   resolveBundledRuntimeExecutable,
@@ -37,6 +56,8 @@ const {
   resolveRuntimeEnv,
   COMPUTER_USE_PROMPT,
 } = loadExportsUnderTest()
+
+const { installAccessGate } = loadAccessGateUnderTest()
 
 function normalizeEnv(env) {
   return JSON.parse(JSON.stringify(env))
@@ -97,6 +118,7 @@ test('resolveRuntimeEnv enables foreground verification by default', () => {
     OPEN_COMPUTER_USE_WINDOWS_ALLOW_UIA_TEXT_FALLBACK: '1',
     OPEN_COMPUTER_USE_WINDOWS_ALLOW_APP_LAUNCH: '0',
     OPEN_COMPUTER_USE_WINDOWS_INTERACTION_MODE: 'foreground-verified',
+    OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR: '1',
   })
 })
 
@@ -118,6 +140,7 @@ test('resolveRuntimeEnv keeps unrelated env and lets explicit config win', () =>
   assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_ALLOW_UIA_TEXT_FALLBACK, '1')
   assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_ALLOW_APP_LAUNCH, '1')
   assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_INTERACTION_MODE, 'foreground-verified')
+  assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR, '1')
 })
 
 test('resolveRuntimeEnv disables focus flags in background mode', () => {
@@ -130,6 +153,12 @@ test('resolveRuntimeEnv disables focus flags in background mode', () => {
   assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_ALLOW_UIA_TEXT_FALLBACK, '0')
   assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_ALLOW_APP_LAUNCH, '0')
   assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_INTERACTION_MODE, 'background-best-effort')
+  assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR, '1')
+})
+
+test('resolveRuntimeEnv can disable the desktop control indicator explicitly', () => {
+  const env = resolveRuntimeEnv({ visualIndicator: false })
+  assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR, '0')
 })
 
 test('COMPUTER_USE_PROMPT preserves v2, fallback, focus, and confirmation guidance', () => {
@@ -140,7 +169,48 @@ test('COMPUTER_USE_PROMPT preserves v2, fallback, focus, and confirmation guidan
   assert.match(COMPUTER_USE_PROMPT, /refresh state after every action/)
   assert.match(COMPUTER_USE_PROMPT, /latest `observation_id`/)
   assert.match(COMPUTER_USE_PROMPT, /latest `screenshot_id`/)
+  assert.match(COMPUTER_USE_PROMPT, /SetFocus/)
+  assert.match(COMPUTER_USE_PROMPT, /FocusedElement/)
   assert.match(COMPUTER_USE_PROMPT, /verify the target window still has focus before typing/)
   assert.match(COMPUTER_USE_PROMPT, /confirmation immediately before the final high-risk action/)
   assert.match(COMPUTER_USE_PROMPT, /re-observe before acting whenever a result is missing, ambiguous, or unknown/)
+})
+
+test('Computer Use ownership is released when the owning Agent turn stops', async () => {
+  const handlers = new Map()
+  const ctx = {
+    on(event, handler) {
+      handlers.set(event, handler)
+    },
+    get() {
+      return undefined
+    },
+  }
+  const continueDecision = { kind: 'continue' }
+  const firstAgent = { session: { id: 'session-a' } }
+  const secondAgent = { session: { id: 'session-b' } }
+
+  installAccessGate(ctx, 'allow')
+
+  const preExecute = handlers.get('tools/pre-execute')
+  assert.equal(typeof preExecute, 'function')
+  assert.equal(typeof handlers.get('agent/turn-stopping'), 'function')
+
+  assert.deepEqual(
+    await preExecute(
+      { name: 'mcp__computer_use__click', callId: 'call-a', agent: firstAgent },
+      async () => continueDecision,
+    ),
+    continueDecision,
+  )
+
+  handlers.get('agent/turn-stopping')({ agent: firstAgent })
+
+  assert.deepEqual(
+    await preExecute(
+      { name: 'mcp__computer_use__click', callId: 'call-b', agent: secondAgent },
+      async () => continueDecision,
+    ),
+    continueDecision,
+  )
 })

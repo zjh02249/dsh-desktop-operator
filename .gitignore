@@ -5,3 +5,4 @@ coverage/
 *.tgz
 artifacts/
 runtime/bin/
+runtime/windows/capture_helper.dll

@@ -28,6 +28,8 @@ export interface Config {
     interactionMode?: ComputerUseInteractionMode;
     /** Whether the runtime may launch the target application when it is not already running. */
     allowAppLaunch?: boolean;
+    /** Show a click-through desktop banner and cursor halo while Computer Use controls Windows. */
+    visualIndicator?: boolean;
     /** Per-MCP-tool deadline in milliseconds. */
     toolCallTimeoutMs?: number;
     /** Whether initial MCP launch or tool discovery failure rejects plugin activation. */
@@ -73,7 +75,7 @@ export declare function resolveRuntimeLaunch(config: Pick<Config, 'runtimeExecut
  * @param config - plugin config carrying explicit env plus high-level runtime switches.
  * @returns env object suitable for both MCP launch and one-shot cleanup helpers.
  */
-export declare function resolveRuntimeEnv(config: Pick<Config, 'env' | 'interactionMode' | 'allowAppLaunch'>): Record<string, string>;
+export declare function resolveRuntimeEnv(config: Pick<Config, 'env' | 'interactionMode' | 'allowAppLaunch' | 'visualIndicator'>): Record<string, string>;
 /** Model guidance for semantic-first, observable desktop operation. */
 export declare const COMPUTER_USE_PROMPT: string;
 /**
@@ -85,7 +87,7 @@ export declare function isComputerUseTool(toolName: string): boolean;
 /**
  * Launch one native MCP process and expose its tools in the current Cordis
  * scope. Mount this plugin in an Agent Preset so process state, element indexes,
- * action approvals, and teardown are Session-owned.
+ * action approvals, and teardown are isolated and leased to one active Agent turn.
  * @param ctx - plugin context carrying tool, prompt, subprocess, and optional approval services.
  * @param config - desktop access, process, timeout, and cleanup policy.
  * @returns startup readiness after MCP launch and initial tool discovery.

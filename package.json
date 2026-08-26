@@ -1,7 +1,7 @@
 {
   "name": "@valkia/dsh-plugin-computer-use",
   "description": "Opt-in DeepSeek Harness desktop Computer Use tools over Open Computer Use MCP",
-  "version": "0.2.0",
+  "version": "0.6.0",
   "type": "module",
   "license": "MIT",
   "keywords": [

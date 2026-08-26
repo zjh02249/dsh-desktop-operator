@@ -4,6 +4,18 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class OCUActionSmokeWin32 {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+    [DllImport("user32.dll")]
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool SetWindowPos(IntPtr hWnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+}
+"@
 $pluginRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\.."))
 if ([string]::IsNullOrWhiteSpace($RuntimePath)) {
     $RuntimePath = Join-Path $pluginRoot "runtime\bin\win32-x64\open-computer-use.exe"
@@ -185,7 +197,14 @@ try {
     $observed = Invoke-ComputerUseTool "get_window_state" @{ window = $window; text_limit = 500; max_tree_nodes = 200; max_tree_depth = 24 }
     Assert-ToolSuccess $observed "get_window_state"
     $initial = Get-SnapshotTokens $observed
+    $captureMatch = [regex]::Match($initial.Text, "(?m)^Capture:\s+method=(?<method>\S+).+occlusionIndependent=(?<independent>true|false)")
+    if (-not $captureMatch.Success) {
+        throw "WPF snapshot did not report capture provenance"
+    }
     $inputElement = Get-Element $initial.Text "Smoke input"
+    if ($initial.Text -notmatch "(?m)^\s*$($inputElement.Index)\s+.*Smoke input.*Secondary Actions:.*SetFocus") {
+        throw "Focusable text input did not expose SetFocus as a semantic action"
+    }
 
     $setValue = Invoke-ComputerUseTool "set_value" @{
         window = $window
@@ -209,6 +228,29 @@ try {
 
     $buttonElement = Get-Element $afterSet.Text "Smoke apply"
     if ($null -eq $buttonElement.X) { throw "Smoke apply did not expose a coordinate frame" }
+    $rect = New-Object OCUActionSmokeWin32+RECT
+    if (-not [OCUActionSmokeWin32]::GetWindowRect([IntPtr][long]$window.hwnd, [ref]$rect)) {
+        throw "Could not read fixture bounds before movement test"
+    }
+    if (-not [OCUActionSmokeWin32]::SetWindowPos([IntPtr][long]$window.hwnd, [IntPtr]::Zero, $rect.Left + 40, $rect.Top + 30, 0, 0, 0x0015)) {
+        throw "Could not move fixture for stale screenshot bounds test"
+    }
+    Start-Sleep -Milliseconds 150
+    $movedCoordinate = Invoke-ComputerUseTool "click" @{
+        window = $window
+        screenshot_id = $afterSet.ScreenshotID
+        x = $buttonElement.X + [int]($buttonElement.Width / 2)
+        y = $buttonElement.Y + [int]($buttonElement.Height / 2)
+        click_method = "app_post"
+    }
+    if (-not $movedCoordinate.isError -or $movedCoordinate.content[0].text -notmatch "stale_screenshot\(window_bounds_changed") {
+        throw "A screenshot taken before external window movement was not rejected"
+    }
+
+    $afterMoveObservation = Invoke-ComputerUseTool "get_window_state" @{ window = $window; text_limit = 500; max_tree_nodes = 200; max_tree_depth = 24 }
+    Assert-ToolSuccess $afterMoveObservation "get_window_state after fixture movement"
+    $afterSet = Get-SnapshotTokens $afterMoveObservation
+    $buttonElement = Get-Element $afterSet.Text "Smoke apply"
     Write-Verbose ("Smoke apply frame: x={0} y={1} width={2} height={3}" -f $buttonElement.X, $buttonElement.Y, $buttonElement.Width, $buttonElement.Height)
     $coordinateClick = Invoke-ComputerUseTool "click" @{
         window = $window
@@ -225,14 +267,18 @@ try {
     }
 
     $inputElement = Get-Element $afterCoordinateClick.Text "Smoke input"
-    $focusInput = Invoke-ComputerUseTool "click" @{
+    $focusInput = Invoke-ComputerUseTool "perform_secondary_action" @{
         window = $window
         observation_id = $afterCoordinateClick.ObservationID
         element_index = $inputElement.Index
-        click_method = "accessibility"
+        action = "SetFocus"
     }
     Assert-ToolSuccess $focusInput "focus input"
     $afterFocus = Get-SnapshotTokens $focusInput
+    if ($afterFocus.Text -notmatch "(?m)^FocusedElement: index=$($inputElement.Index)\s") {
+        Write-Verbose "Focus snapshot:`n$($afterFocus.Text)"
+        throw "SetFocus did not return the exact focused element identity"
+    }
 
     $typed = Invoke-ComputerUseTool "type_text" @{
         window = $window
@@ -261,7 +307,11 @@ try {
         app = $window.appId
         pid = $window.pid
         hwnd = $window.hwnd
+        captureMethod = $captureMatch.Groups["method"].Value
+        occlusionIndependentCapture = ($captureMatch.Groups["independent"].Value -eq "true")
         staleScreenshotRejected = $true
+        movedWindowScreenshotRejected = $true
+        focusIdentityVerified = $true
         setValueVerified = $true
         coordinateClickVerified = $true
         typeTextVerified = $true

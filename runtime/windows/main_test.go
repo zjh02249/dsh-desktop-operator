@@ -3,9 +3,15 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
+
+func TestMain(m *testing.M) {
+	_ = os.Setenv("OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR", "0")
+	os.Exit(m.Run())
+}
 
 func TestToolDefinitionCount(t *testing.T) {
 	if got := len(toolDefinitions()); got != 14 {
@@ -241,6 +247,46 @@ func TestWindowActionsRequireMatchingSnapshotIDs(t *testing.T) {
 	}
 	if result := service.drag(actionTarget{Window: &window, ScreenshotID: "stale"}, floatPtr(1), floatPtr(2), floatPtr(3), floatPtr(4)); !result.IsError || !strings.Contains(result.Content[0].Text, "screenshot_id does not match") {
 		t.Fatalf("stale screenshot_id result = %#v", result)
+	}
+}
+
+func TestCoordinateActionForwardsCaptureMappingContract(t *testing.T) {
+	window := windowRef{AppID: "notepad", PID: 42, HWND: "1234", Generation: "42-1234-999"}
+	capture := &captureDescriptor{
+		Method:          "windows-graphics-capture",
+		Width:           800,
+		Height:          600,
+		CoordinateSpace: "physical-screen-pixels",
+		DPI:             192,
+		WindowDPI:       96,
+		ScaleFactor:     2,
+	}
+	service := newService()
+	service.rememberSnapshot(snapshotWindowKey(window), &appSnapshot{
+		App:           appDescriptor{Name: "notepad", PID: 42},
+		Window:        &window,
+		ObservationID: "obs-1",
+		ScreenshotID:  "shot-1",
+		WindowBounds:  &frame{X: -400, Y: 20, Width: 800, Height: 600},
+		Capture:       capture,
+	})
+	var request psRequest
+	service.runPS = func(input psRequest) (*psResponse, error) {
+		request = input
+		return &psResponse{OK: true, Status: "applied", Snapshot: &appSnapshot{
+			App:           appDescriptor{Name: "notepad", PID: 42},
+			Window:        &window,
+			ObservationID: "obs-2",
+			ScreenshotID:  "shot-2",
+		}}, nil
+	}
+	x, y := 100.0, 50.0
+	result := service.click(actionTarget{Window: &window, ScreenshotID: "shot-1"}, "", &x, &y, 1, "left", "auto")
+	if result.IsError {
+		t.Fatalf("coordinate click failed: %#v", result)
+	}
+	if request.Capture != capture || request.WindowBounds == nil || request.WindowBounds.X != -400 {
+		t.Fatalf("coordinate action did not preserve screenshot mapping metadata: %#v", request)
 	}
 }
 
@@ -580,6 +626,169 @@ func TestWindowsRuntimeTreeBudgetDefaultsMatchMacOS(t *testing.T) {
 	}
 	if !strings.Contains(windowsRuntimeScript, "$script:nextIndex -ge $script:MaxTreeNodes -or $depth -gt $script:MaxTreeDepth") {
 		t.Fatal("Windows runtime should use shared tree budget constants while rendering")
+	}
+}
+
+func TestSnapshotRendersExactFocusedElementIdentity(t *testing.T) {
+	snapshot := &appSnapshot{
+		App: appDescriptor{Name: "DingTalk", PID: 42},
+		FocusedElement: &elementRecord{
+			Index:                17,
+			RuntimeID:            []int{42, 17},
+			AutomationID:         "contact-search",
+			Name:                 "搜索",
+			LocalizedControlType: "编辑",
+			HasKeyboardFocus:     true,
+		},
+	}
+
+	text := snapshot.renderedText()
+	for _, marker := range []string{"FocusedElement: index=17", "runtimeId=[42 17]", `automationId="contact-search"`, `name="搜索"`} {
+		if !strings.Contains(text, marker) {
+			t.Fatalf("rendered snapshot should expose exact focused element identity; missing %q in %q", marker, text)
+		}
+	}
+}
+
+func TestWindowsRuntimeUIAFocusAndSetValueAreVerified(t *testing.T) {
+	markers := []string{
+		`$names.Add("SetFocus")`,
+		"function Set-ElementFocusVerified",
+		"Same-RuntimeId @($focused.GetRuntimeId()) @($element.GetRuntimeId())",
+		"focusedElement = $focusedElement",
+		"function Set-ElementValueVerified",
+		`throw "value_not_applied`,
+		`throw "value_verification_unknown`,
+	}
+	for _, marker := range markers {
+		if !strings.Contains(windowsRuntimeScript, marker) {
+			t.Fatalf("Windows UIA semantic action loop missing %q", marker)
+		}
+	}
+}
+
+func TestSnapshotRendersCaptureProvenance(t *testing.T) {
+	snapshot := &appSnapshot{
+		App: appDescriptor{Name: "DingTalk", PID: 42},
+		Capture: &captureDescriptor{
+			Method:               "windows-graphics-capture",
+			Width:                1200,
+			Height:               800,
+			OcclusionIndependent: true,
+			CoordinateSpace:      "physical-screen-pixels",
+			DPI:                  192,
+			WindowDPI:            96,
+			ScaleFactor:          2,
+			DPIAwareness:         "per-monitor-v2",
+		},
+	}
+	text := snapshot.renderedText()
+	for _, marker := range []string{"Capture: method=windows-graphics-capture", "size=1200x800", "occlusionIndependent=true", "coordinateSpace=physical-screen-pixels", "dpi=192", "windowDpi=96", "scale=2.00", "dpiAwareness=per-monitor-v2"} {
+		if !strings.Contains(text, marker) {
+			t.Fatalf("rendered snapshot should expose capture provenance; missing %q in %q", marker, text)
+		}
+	}
+}
+
+func TestWindowsRuntimeUsesPhysicalCoordinateMappingAndMinimizedRecovery(t *testing.T) {
+	markers := []string{
+		"EnablePerMonitorV2DpiAwareness",
+		"GetDpiForWindow",
+		"GetEffectiveMonitorDpi",
+		`coordinateSpace = "physical-screen-pixels"`,
+		"function Convert-ScreenshotPoint",
+		"coordinate_out_of_bounds",
+		"stale_screenshot(window_bounds_changed",
+		"window_minimized_activate_window_required",
+		"isMinimized = [OCUWin32]::IsIconic($hwnd)",
+	}
+	for _, marker := range markers {
+		if !strings.Contains(windowsRuntimeScript, marker) {
+			t.Fatalf("Windows DPI/minimized contract missing %q", marker)
+		}
+	}
+}
+
+func TestWindowsRuntimeUsesGraphicsCaptureBeforeDiagnosticFallbacks(t *testing.T) {
+	runtimeMarkers := []string{
+		`Assembly]::LoadFrom($captureHelperPath)`,
+		"[OCUWindowsGraphicsCapture]::CaptureWindow",
+		`New-CaptureDescriptor "windows-graphics-capture"`,
+		"PrintWindow",
+		"PW_RENDERFULLCONTENT",
+		`New-CaptureDescriptor "print-window"`,
+		"CopyFromScreen",
+		`New-CaptureDescriptor "screen-copy-fallback"`,
+		"capture = $capture.descriptor",
+	}
+	for _, marker := range runtimeMarkers {
+		if !strings.Contains(windowsRuntimeScript, marker) {
+			t.Fatalf("Windows capture pipeline missing %q", marker)
+		}
+	}
+
+	helperSource, err := os.ReadFile("capture_helper.cs")
+	if err != nil {
+		t.Fatalf("read Windows capture helper source: %v", err)
+	}
+	for _, marker := range []string{"CreateForWindow", "CreateFreeThreaded", "CreateCopyFromSurfaceAsync", "BitmapEncoder.PngEncoderId"} {
+		if !strings.Contains(string(helperSource), marker) {
+			t.Fatalf("Windows capture helper missing %q", marker)
+		}
+	}
+	if len(windowsCaptureHelper) == 0 {
+		t.Fatal("compiled Windows capture helper must be embedded into the runtime")
+	}
+}
+
+func TestControlActionShowsVisualIndicatorBeforePowerShell(t *testing.T) {
+	service := newService()
+	var order []string
+	service.showIndicator = func(request psRequest) {
+		order = append(order, "indicator:"+request.Tool)
+	}
+	service.runPS = func(request psRequest) (*psResponse, error) {
+		order = append(order, "powershell:"+request.Tool)
+		return &psResponse{
+			OK: true,
+			Snapshot: &appSnapshot{
+				App:           appDescriptor{Name: "notepad", PID: 42},
+				ObservationID: "obs-after-click",
+				ScreenshotID:  "shot-after-click",
+			},
+		}, nil
+	}
+
+	_, result := service.refreshSnapshot("notepad", psRequest{Tool: "click", App: "notepad"})
+	if result.IsError {
+		t.Fatalf("refreshSnapshot failed: %#v", result)
+	}
+	if got, want := strings.Join(order, ","), "indicator:click,powershell:click"; got != want {
+		t.Fatalf("control action order = %q, want %q", got, want)
+	}
+}
+
+func TestWindowsIndicatorIsTopmostClickThroughAndTracksCursor(t *testing.T) {
+	markers := []string{
+		"DeepSeek 正在控制电脑",
+		"WS_EX_TRANSPARENT",
+		"WS_EX_NOACTIVATE",
+		"HTTRANSPARENT",
+		"TopMost = $true",
+		"GetCursorPos",
+		"SetProcessDpiAwarenessContext",
+		"OwnerProcessId",
+	}
+	for _, marker := range markers {
+		if !strings.Contains(windowsIndicatorScript, marker) {
+			t.Fatalf("Windows control indicator must be visible without stealing input; missing %q", marker)
+		}
+	}
+}
+
+func TestWindowsMouseActionsAnimateTheSystemCursor(t *testing.T) {
+	if !strings.Contains(windowsRuntimeScript, "MoveCursorSmoothly") {
+		t.Fatal("Windows mouse actions should animate the system cursor so automated control is obvious")
 	}
 }
 

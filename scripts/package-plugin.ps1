@@ -62,6 +62,8 @@ try {
         "package/runtime/bin/win32-x64/open-computer-use.exe",
         "package/runtime/bin/win32-arm64/open-computer-use.exe",
         "package/runtime/windows/main.go",
+        "package/runtime/windows/capture_helper.cs",
+        "package/runtime/windows/indicator.ps1",
         "package/runtime/windows/runtime.ps1",
         "package/runtime/LICENSE.open-computer-use",
         "package/runtime/THIRD_PARTY_NOTICES.open-computer-use.md"

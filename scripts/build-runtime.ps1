@@ -12,6 +12,8 @@ $ErrorActionPreference = "Stop"
 $pluginRoot = Split-Path -Parent $PSScriptRoot
 $moduleRoot = Join-Path $pluginRoot "runtime\windows"
 $binRoot = Join-Path $pluginRoot "runtime\bin"
+$captureHelperSource = Join-Path $moduleRoot "capture_helper.cs"
+$captureHelperOutput = Join-Path $moduleRoot "capture_helper.dll"
 
 function Get-Sha256([string]$Path) {
     $stream = [System.IO.File]::OpenRead($Path)
@@ -21,6 +23,77 @@ function Get-Sha256([string]$Path) {
     } finally {
         $sha256.Dispose()
         $stream.Dispose()
+    }
+}
+
+function Find-ContractReference([string]$SdkDirectory, [string]$ContractName) {
+    $contractRoot = Join-Path $SdkDirectory $ContractName
+    if (-not (Test-Path -LiteralPath $contractRoot -PathType Container)) {
+        throw "Windows SDK contract not found: $contractRoot"
+    }
+    $reference = Get-ChildItem -LiteralPath $contractRoot -Filter "$ContractName.winmd" -File -Recurse |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($null -eq $reference) {
+        throw "Windows SDK contract metadata not found below $contractRoot"
+    }
+    return $reference.FullName
+}
+
+function Build-CaptureHelper {
+    if (-not (Test-Path -LiteralPath $captureHelperSource -PathType Leaf)) {
+        throw "Windows capture helper source not found: $captureHelperSource"
+    }
+
+    $frameworkRoot = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319"
+    if (-not (Test-Path -LiteralPath (Join-Path $frameworkRoot "csc.exe") -PathType Leaf)) {
+        $frameworkRoot = Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319"
+    }
+    $compiler = Join-Path $frameworkRoot "csc.exe"
+    $windowsRuntimeReference = Join-Path $frameworkRoot "System.Runtime.WindowsRuntime.dll"
+
+    $referenceAssemblyRoot = Join-Path ${env:ProgramFiles(x86)} "Reference Assemblies\Microsoft\Framework\.NETFramework"
+    $facadeRoot = Get-ChildItem -LiteralPath $referenceAssemblyRoot -Directory |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "Facades\System.Runtime.dll") -PathType Leaf } |
+        Sort-Object { [version]($_.Name.TrimStart("v")) } -Descending |
+        Select-Object -First 1 |
+        ForEach-Object { Join-Path $_.FullName "Facades" }
+
+    $windowsKitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10"
+    $sdkDirectory = Get-ChildItem -LiteralPath (Join-Path $windowsKitsRoot "References") -Directory |
+        Sort-Object { [version]$_.Name } -Descending |
+        Select-Object -First 1
+    if ($null -eq $sdkDirectory) {
+        throw "No Windows 10 SDK contract references were found below $windowsKitsRoot"
+    }
+
+    $references = @(
+        $windowsRuntimeReference,
+        (Join-Path $facadeRoot "System.Runtime.dll"),
+        (Join-Path $facadeRoot "System.Runtime.InteropServices.WindowsRuntime.dll"),
+        (Join-Path $windowsKitsRoot "UnionMetadata\Facade\Windows.WinMD"),
+        (Find-ContractReference $sdkDirectory.FullName "Windows.Foundation.FoundationContract"),
+        (Find-ContractReference $sdkDirectory.FullName "Windows.Foundation.UniversalApiContract")
+    )
+    $missingReferences = @($references | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) })
+    if (-not (Test-Path -LiteralPath $compiler -PathType Leaf) -or $null -eq $facadeRoot -or $missingReferences.Count -gt 0) {
+        throw "The .NET Framework/Windows SDK compiler references required for Windows.Graphics.Capture are incomplete. Missing: $($missingReferences -join ', ')"
+    }
+
+    $compilerArguments = @("/nologo", "/target:library", "/optimize+", "/platform:anycpu", "/out:$captureHelperOutput")
+    $compilerArguments += $references | ForEach-Object { "/reference:$_" }
+    $compilerArguments += $captureHelperSource
+    & $compiler @compilerArguments
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $captureHelperOutput -PathType Leaf)) {
+        throw "Windows capture helper compilation failed with exit code $LASTEXITCODE."
+    }
+
+    return [ordered]@{
+        source = "runtime/windows/capture_helper.cs"
+        embeddedFile = "runtime/windows/capture_helper.dll"
+        windowsSdk = $sdkDirectory.Name
+        size = (Get-Item -LiteralPath $captureHelperOutput).Length
+        sha256 = Get-Sha256 $captureHelperOutput
     }
 }
 
@@ -41,6 +114,7 @@ $package = Get-Content -Raw -LiteralPath (Join-Path $pluginRoot "package.json") 
 $upstream = Get-Content -Raw -LiteralPath (Join-Path $pluginRoot "runtime\upstream.json") | ConvertFrom-Json
 $version = [string]$package.version
 $artifacts = @()
+$captureHelper = Build-CaptureHelper
 
 Push-Location $moduleRoot
 try {
@@ -94,6 +168,7 @@ $manifest = [ordered]@{
         baseCommit = [string]$upstream.baseCommit
         sourceState = [string]$upstream.sourceState
     }
+    captureHelper = $captureHelper
     artifacts = $artifacts
 }
 $manifestPath = Join-Path $binRoot "runtime-manifest.json"

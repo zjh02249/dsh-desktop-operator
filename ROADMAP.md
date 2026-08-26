@@ -139,7 +139,13 @@ ActionResult
 - 已实现首版前台 `SendInput` 鼠标、拖拽、滚轮、Unicode 文本和按键路径，以及 `occluded_by_non_target` 拒绝；本地 WPF 无外发动作 smoke 全通过。
 - DSH 插件默认直接启动包内 x64/arm64 原生运行时，移除外部 `open-computer-use` 安装依赖；`runtimeExecutable` 仅保留为开发覆盖项。
 - 已建立 `pnpm package:plugin` 单入口：测试、`go vet`、双架构交叉编译、SHA-256 manifest、插件测试、tgz 打包与内容门禁一次完成。
-- 下一切片：Windows.Graphics.Capture、DPI/多屏/模态恢复、业务后置条件 DSL、动作风险分类确认、真实应用矩阵与正式打包签名。
+- 已将插件互斥范围从 Session 修正为实际使用 Computer Use 的 Agent turn；turn stopping、Agent disposal 与 Session disposal 都会立即释放占用。
+- 已增加不抢焦点、可穿透点击的桌面控制状态条、真实鼠标橙色光环和平滑鼠标轨迹，并在 owner/runtime 退出时自动清理。
+- 已完成 M4 首个语义闭环：可聚焦元素暴露 `SetFocus`，焦点按 UIA runtime identity 精确验证，快照返回结构化 `focusedElement`/`selectedElements`/`documentText`，`set_value` 必须读回一致才可返回 `applied`。
+- 已把编译期 C# WinRT/D3D 帮助程序嵌入单个 Go runtime，以 Windows.Graphics.Capture 作为截图主路径；完全遮挡的 WPF 窗口仍能读取目标洋红色内容，快照同时暴露捕获来源和诊断降级状态。
+- 已声明并验证 Per-Monitor-V2 DPI awareness，快照分别返回显示器有效 DPI、窗口 DPI、物理坐标空间和虚拟桌面边界；视觉坐标按截图／窗口比例映射，越界坐标和窗口移动后的旧截图会在输入前拒绝。
+- 已让最小化窗口返回显式不可捕获状态，并验证 `activate_window → fresh get_window_state` 能恢复 WGC 捕获；当前 200% DPI 实机 smoke 通过。
+- 下一切片：完整多屏／负坐标／其他 DPI 机器矩阵、模态恢复、业务后置条件 DSL、动作风险分类确认、真实应用矩阵与正式打包签名。
 
 ### M0：基线、工具链与回归夹具
 
@@ -151,7 +157,7 @@ ActionResult
 
 任务：
 
-1. 固定当前 v0.3.1 行为测试，保留后台模式兼容性。
+1. 固定当前 v0.5.0 行为测试，保留后台模式兼容性。
 2. 建立 Win32、WPF、Qt、Electron、文本编辑器、模态框、多窗口夹具。
 3. 增加 DingTalk、VS Code、记事本、资源管理器和 Office 类真实应用的手工 smoke 场景。
 4. 固定 Go、Node、pnpm 与 Windows SDK 版本；当前本机没有 Go，实施时使用工作区隔离工具链或 CI，不直接污染系统环境。
@@ -241,7 +247,7 @@ ActionResult
 4. 重写模型指导：唯一窗口选择、优先语义操作、焦点验证、一次一动作、未知结果处理。
 5. 将确认策略从粗粒度 tool-call 升级为动作风险分类：发送、删除、上传、购买、权限、敏感数据传输在最终动作前确认。
 6. 屏幕、邮件、聊天和文档内容一律视为不可信输入，不能自行授予操作权限。
-7. 保留单 session runtime ownership，增加窗口级动作锁与 turn cancellation。
+7. 保留单 runtime ownership，以实际 Agent turn 为租约边界，增加窗口级动作锁与 turn cancellation。
 
 退出门槛：安全测试中的所有高风险最终动作 100% 被确认门阻断；普通观察和无副作用导航无需多余确认。
 

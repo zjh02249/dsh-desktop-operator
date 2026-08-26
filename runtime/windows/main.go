@@ -17,14 +17,20 @@ import (
 	"time"
 )
 
-var version = "0.3.1"
+var version = "0.6.0"
 
 var clickMethodValues = []string{"auto", "accessibility", "app_post", "sky_click", "global"}
 
 //go:embed runtime.ps1
 var windowsRuntimeScript string
 
-const serverInstructions = "Computer Use tools let you interact with Windows apps by performing UI actions.\n\nFor the window-level v2 flow, call `list_windows`, resolve exactly one target with `get_window`, call `activate_window` when foreground input is required, and observe it with `get_window_state`. The legacy `get_app_state` tool remains a compatibility adapter for app-name workflows.\n\nPrefer element-targeted interactions over coordinate clicks when an index for the targeted element is available. Observe again after every action and never reuse a WindowRef after `stale_window`. Window-scoped v2 actions verify the exact foreground HWND and use UI Automation or SendInput; coordinate actions reject non-target occlusion. Legacy app-name actions retain their best-effort window-message fallback. The Windows runtime does not auto-launch apps or enable legacy UIA focus/text fallbacks by default; these remain explicit runtime capabilities."
+//go:embed indicator.ps1
+var windowsIndicatorScript string
+
+//go:embed capture_helper.dll
+var windowsCaptureHelper []byte
+
+const serverInstructions = "Computer Use tools let you interact with Windows apps by performing UI actions.\n\nFor the window-level v2 flow, call `list_windows`, resolve exactly one target with `get_window`, call `activate_window` when foreground input is required, and observe it with `get_window_state`. The legacy `get_app_state` tool remains a compatibility adapter for app-name workflows.\n\nPrefer element-targeted interactions over coordinate clicks when an index for the targeted element is available. For editable controls, use `perform_secondary_action` with `SetFocus` when exposed, verify the returned `FocusedElement` identity, then use `set_value`; the runtime verifies the value after applying it. Observe again after every action and never reuse a WindowRef after `stale_window`. Window-scoped v2 actions verify the exact foreground HWND and use UI Automation or SendInput; coordinate actions reject non-target occlusion. Legacy app-name actions retain their best-effort window-message fallback. The Windows runtime does not auto-launch apps or enable legacy UIA focus/text fallbacks by default; these remain explicit runtime capabilities."
 
 type toolDefinition struct {
 	Name        string         `json:"name"`
@@ -64,6 +70,7 @@ type windowRef struct {
 	OwnerHWND      string `json:"ownerHwnd,omitempty"`
 	IsModal        bool   `json:"isModal,omitempty"`
 	IsForeground   bool   `json:"isForeground,omitempty"`
+	IsMinimized    bool   `json:"isMinimized,omitempty"`
 	ProcessStarted string `json:"processStarted,omitempty"`
 }
 
@@ -72,6 +79,23 @@ type frame struct {
 	Y      float64 `json:"y"`
 	Width  float64 `json:"width"`
 	Height float64 `json:"height"`
+}
+
+type captureDescriptor struct {
+	Method               string  `json:"method"`
+	OriginX              float64 `json:"originX"`
+	OriginY              float64 `json:"originY"`
+	Width                int     `json:"width"`
+	Height               int     `json:"height"`
+	OcclusionIndependent bool    `json:"occlusionIndependent"`
+	DiagnosticFallback   bool    `json:"diagnosticFallback,omitempty"`
+	Warning              string  `json:"warning,omitempty"`
+	DPI                  int     `json:"dpi,omitempty"`
+	WindowDPI            int     `json:"windowDpi,omitempty"`
+	ScaleFactor          float64 `json:"scaleFactor,omitempty"`
+	CoordinateSpace      string  `json:"coordinateSpace,omitempty"`
+	DPIAwareness         string  `json:"dpiAwareness,omitempty"`
+	VirtualScreen        *frame  `json:"virtualScreen,omitempty"`
 }
 
 func (f frame) renderedLocalFrame() string {
@@ -90,21 +114,31 @@ type elementRecord struct {
 	NativeWindowHandle   int64    `json:"nativeWindowHandle,omitempty"`
 	Frame                *frame   `json:"frame,omitempty"`
 	Actions              []string `json:"actions,omitempty"`
+	IsEnabled            bool     `json:"isEnabled,omitempty"`
+	IsOffscreen          bool     `json:"isOffscreen,omitempty"`
+	IsKeyboardFocusable  bool     `json:"isKeyboardFocusable,omitempty"`
+	HasKeyboardFocus     bool     `json:"hasKeyboardFocus,omitempty"`
+	IsSelected           bool     `json:"isSelected,omitempty"`
+	IsPassword           bool     `json:"isPassword,omitempty"`
 }
 
 type appSnapshot struct {
-	App                 appDescriptor   `json:"app"`
-	Window              *windowRef      `json:"window,omitempty"`
-	ObservationID       string          `json:"observationId,omitempty"`
-	ScreenshotID        string          `json:"screenshotId,omitempty"`
-	ActionStatus        string          `json:"actionStatus,omitempty"`
-	WindowTitle         string          `json:"windowTitle,omitempty"`
-	WindowBounds        *frame          `json:"windowBounds,omitempty"`
-	ScreenshotPNGBase64 string          `json:"screenshotPngBase64,omitempty"`
-	TreeLines           []string        `json:"treeLines,omitempty"`
-	FocusedSummary      string          `json:"focusedSummary,omitempty"`
-	SelectedText        string          `json:"selectedText,omitempty"`
-	Elements            []elementRecord `json:"elements,omitempty"`
+	App                 appDescriptor      `json:"app"`
+	Window              *windowRef         `json:"window,omitempty"`
+	ObservationID       string             `json:"observationId,omitempty"`
+	ScreenshotID        string             `json:"screenshotId,omitempty"`
+	ActionStatus        string             `json:"actionStatus,omitempty"`
+	WindowTitle         string             `json:"windowTitle,omitempty"`
+	WindowBounds        *frame             `json:"windowBounds,omitempty"`
+	Capture             *captureDescriptor `json:"capture,omitempty"`
+	ScreenshotPNGBase64 string             `json:"screenshotPngBase64,omitempty"`
+	TreeLines           []string           `json:"treeLines,omitempty"`
+	FocusedSummary      string             `json:"focusedSummary,omitempty"`
+	FocusedElement      *elementRecord     `json:"focusedElement,omitempty"`
+	SelectedText        string             `json:"selectedText,omitempty"`
+	SelectedElements    []elementRecord    `json:"selectedElements,omitempty"`
+	DocumentText        string             `json:"documentText,omitempty"`
+	Elements            []elementRecord    `json:"elements,omitempty"`
 }
 
 func (s *appSnapshot) renderedText() string {
@@ -137,11 +171,45 @@ func (s *appSnapshot) renderedText() string {
 	if s.ActionStatus != "" {
 		lines = append(lines, fmt.Sprintf("ActionStatus: %s", s.ActionStatus))
 	}
+	if s.Capture != nil {
+		lines = append(lines, fmt.Sprintf(
+			"Capture: method=%s size=%dx%d origin=(%.0f,%.0f) occlusionIndependent=%t diagnosticFallback=%t coordinateSpace=%s dpi=%d windowDpi=%d scale=%.2f dpiAwareness=%s",
+			s.Capture.Method,
+			s.Capture.Width,
+			s.Capture.Height,
+			s.Capture.OriginX,
+			s.Capture.OriginY,
+			s.Capture.OcclusionIndependent,
+			s.Capture.DiagnosticFallback,
+			s.Capture.CoordinateSpace,
+			s.Capture.DPI,
+			s.Capture.WindowDPI,
+			s.Capture.ScaleFactor,
+			s.Capture.DPIAwareness,
+		))
+		if strings.TrimSpace(s.Capture.Warning) != "" {
+			lines = append(lines, "CaptureWarning: "+s.Capture.Warning)
+		}
+	}
 	lines = append(lines, s.TreeLines...)
+	if s.FocusedElement != nil {
+		focused := s.FocusedElement
+		lines = append(lines, "", fmt.Sprintf(
+			"FocusedElement: index=%d runtimeId=%v automationId=%s name=%s controlType=%s",
+			focused.Index,
+			focused.RuntimeID,
+			strconv.Quote(focused.AutomationID),
+			strconv.Quote(focused.Name),
+			strconv.Quote(defaultString(focused.LocalizedControlType, focused.ControlType)),
+		))
+	}
 	if strings.TrimSpace(s.SelectedText) != "" {
 		lines = append(lines, "", fmt.Sprintf("Selected text: [%s]", s.SelectedText))
 	} else if strings.TrimSpace(s.FocusedSummary) != "" {
 		lines = append(lines, "", fmt.Sprintf("The focused UI element is %s.", s.FocusedSummary))
+	}
+	if strings.TrimSpace(s.DocumentText) != "" {
+		lines = append(lines, "", fmt.Sprintf("Document text: [%s]", s.DocumentText))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -161,32 +229,33 @@ func (s *appSnapshot) result() toolCallResult {
 }
 
 type psRequest struct {
-	Tool          string         `json:"tool"`
-	App           string         `json:"app,omitempty"`
-	Title         string         `json:"title,omitempty"`
-	Window        *windowRef     `json:"window,omitempty"`
-	Element       *elementRecord `json:"element,omitempty"`
-	X             *float64       `json:"x,omitempty"`
-	Y             *float64       `json:"y,omitempty"`
-	FromX         *float64       `json:"from_x,omitempty"`
-	FromY         *float64       `json:"from_y,omitempty"`
-	ToX           *float64       `json:"to_x,omitempty"`
-	ToY           *float64       `json:"to_y,omitempty"`
-	ClickCount    int            `json:"click_count,omitempty"`
-	MouseButton   string         `json:"mouse_button,omitempty"`
-	ClickMethod   string         `json:"click_method,omitempty"`
-	Action        string         `json:"action,omitempty"`
-	Direction     string         `json:"direction,omitempty"`
-	Pages         float64        `json:"pages,omitempty"`
-	Text          string         `json:"text,omitempty"`
-	Key           string         `json:"key,omitempty"`
-	Value         string         `json:"value,omitempty"`
-	ObservationID string         `json:"observation_id,omitempty"`
-	ScreenshotID  string         `json:"screenshot_id,omitempty"`
-	WindowBounds  *frame         `json:"windowBounds,omitempty"`
-	TextLimit     any            `json:"text_limit,omitempty"`
-	MaxTreeNodes  int            `json:"max_tree_nodes,omitempty"`
-	MaxTreeDepth  int            `json:"max_tree_depth,omitempty"`
+	Tool          string             `json:"tool"`
+	App           string             `json:"app,omitempty"`
+	Title         string             `json:"title,omitempty"`
+	Window        *windowRef         `json:"window,omitempty"`
+	Element       *elementRecord     `json:"element,omitempty"`
+	X             *float64           `json:"x,omitempty"`
+	Y             *float64           `json:"y,omitempty"`
+	FromX         *float64           `json:"from_x,omitempty"`
+	FromY         *float64           `json:"from_y,omitempty"`
+	ToX           *float64           `json:"to_x,omitempty"`
+	ToY           *float64           `json:"to_y,omitempty"`
+	ClickCount    int                `json:"click_count,omitempty"`
+	MouseButton   string             `json:"mouse_button,omitempty"`
+	ClickMethod   string             `json:"click_method,omitempty"`
+	Action        string             `json:"action,omitempty"`
+	Direction     string             `json:"direction,omitempty"`
+	Pages         float64            `json:"pages,omitempty"`
+	Text          string             `json:"text,omitempty"`
+	Key           string             `json:"key,omitempty"`
+	Value         string             `json:"value,omitempty"`
+	ObservationID string             `json:"observation_id,omitempty"`
+	ScreenshotID  string             `json:"screenshot_id,omitempty"`
+	WindowBounds  *frame             `json:"windowBounds,omitempty"`
+	Capture       *captureDescriptor `json:"capture,omitempty"`
+	TextLimit     any                `json:"text_limit,omitempty"`
+	MaxTreeNodes  int                `json:"max_tree_nodes,omitempty"`
+	MaxTreeDepth  int                `json:"max_tree_depth,omitempty"`
 }
 
 type textLimit struct {
@@ -212,8 +281,19 @@ type psResponse struct {
 }
 
 type service struct {
-	snapshots map[string]*appSnapshot
-	runPS     func(psRequest) (*psResponse, error)
+	snapshots     map[string]*appSnapshot
+	runPS         func(psRequest) (*psResponse, error)
+	showIndicator func(psRequest)
+}
+
+type controlIndicatorState struct {
+	Active       bool   `json:"active"`
+	Action       string `json:"action,omitempty"`
+	UpdatedAtUTC string `json:"updatedAtUtc"`
+}
+
+type controlIndicatorReady struct {
+	Visible bool `json:"visible"`
 }
 
 type actionTarget struct {
@@ -240,9 +320,17 @@ type resolvedActionTarget struct {
 
 func newService() *service {
 	return &service{
-		snapshots: map[string]*appSnapshot{},
-		runPS:     runPowerShell,
+		snapshots:     map[string]*appSnapshot{},
+		runPS:         runPowerShell,
+		showIndicator: showControlIndicator,
 	}
+}
+
+func (s *service) executePS(request psRequest) (*psResponse, error) {
+	if isControlTool(request.Tool) && s.showIndicator != nil {
+		s.showIndicator(request)
+	}
+	return s.runPS(request)
 }
 
 func (s *service) callTool(name string, args map[string]any) toolCallResult {
@@ -368,7 +456,7 @@ func (s *service) callTool(name string, args map[string]any) toolCallResult {
 }
 
 func (s *service) listApps() toolCallResult {
-	response, err := s.runPS(psRequest{Tool: "list_apps"})
+	response, err := s.executePS(psRequest{Tool: "list_apps"})
 	if err != nil {
 		return textResult(err.Error(), true)
 	}
@@ -382,7 +470,7 @@ func (s *service) listApps() toolCallResult {
 }
 
 func (s *service) listWindows(app string) toolCallResult {
-	response, err := s.runPS(psRequest{Tool: "list_windows", App: app})
+	response, err := s.executePS(psRequest{Tool: "list_windows", App: app})
 	if err != nil {
 		return textResult(err.Error(), true)
 	}
@@ -399,7 +487,7 @@ func (s *service) getWindow(app, title string) toolCallResult {
 	if app == "" {
 		return textResult("Missing required argument: app", true)
 	}
-	response, err := s.runPS(psRequest{Tool: "get_window", App: app, Title: title})
+	response, err := s.executePS(psRequest{Tool: "get_window", App: app, Title: title})
 	if err != nil {
 		return textResult(err.Error(), true)
 	}
@@ -420,7 +508,7 @@ func (s *service) launchApp(app string) toolCallResult {
 	if app == "" {
 		return textResult("Missing required argument: app", true)
 	}
-	response, err := s.runPS(psRequest{Tool: "launch_app", App: app})
+	response, err := s.executePS(psRequest{Tool: "launch_app", App: app})
 	if err != nil {
 		return textResult(err.Error(), true)
 	}
@@ -441,7 +529,7 @@ func (s *service) activateWindow(window *windowRef) toolCallResult {
 	if window == nil {
 		return textResult("Missing required argument: window", true)
 	}
-	response, err := s.runPS(psRequest{Tool: "activate_window", Window: window})
+	response, err := s.executePS(psRequest{Tool: "activate_window", Window: window})
 	if err != nil {
 		return textResult(err.Error(), true)
 	}
@@ -532,6 +620,7 @@ func (s *service) click(target actionTarget, elementIndex string, x, y *float64,
 		ObservationID: target.ObservationID,
 		ScreenshotID:  target.ScreenshotID,
 		WindowBounds:  snapshot.WindowBounds,
+		Capture:       snapshot.Capture,
 	}
 	if elementIndex != "" {
 		record, err := lookupElement(snapshot, elementIndex)
@@ -625,6 +714,7 @@ func (s *service) drag(target actionTarget, fromX, fromY, toX, toY *float64) too
 		ToY:          toY,
 		ScreenshotID: target.ScreenshotID,
 		WindowBounds: resolved.snapshot.WindowBounds,
+		Capture:      resolved.snapshot.Capture,
 	})
 }
 
@@ -697,7 +787,7 @@ func (s *service) currentSnapshot(app string) *appSnapshot {
 }
 
 func (s *service) refreshSnapshot(cacheKey string, request psRequest) (*appSnapshot, toolCallResult) {
-	response, err := s.runPS(request)
+	response, err := s.executePS(request)
 	if err != nil {
 		return nil, textResult(err.Error(), true)
 	}
@@ -827,6 +917,144 @@ func isMutatingTool(name string) bool {
 	}
 }
 
+func isControlTool(name string) bool {
+	return name == "launch_app" || name == "activate_window" || isMutatingTool(name)
+}
+
+func controlIndicatorStateDirectory() string {
+	if override := strings.TrimSpace(os.Getenv("OPEN_COMPUTER_USE_WINDOWS_INDICATOR_STATE_DIR")); override != "" {
+		return override
+	}
+	base, err := os.UserCacheDir()
+	if err != nil || strings.TrimSpace(base) == "" {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, "DeepSeekHarness", "computer-use")
+}
+
+func visualIndicatorEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR")))
+	return value != "0" && value != "false" && value != "off"
+}
+
+func writeControlIndicatorState(active bool, action string) error {
+	directory := controlIndicatorStateDirectory()
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(controlIndicatorState{
+		Active:       active,
+		Action:       action,
+		UpdatedAtUTC: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(directory, "control-state.json"), data, 0o600)
+}
+
+func readControlIndicatorReady(directory string) (controlIndicatorReady, bool) {
+	path := filepath.Join(directory, "control-ready.json")
+	info, err := os.Stat(path)
+	if err != nil || time.Since(info.ModTime()) >= 2*time.Second {
+		return controlIndicatorReady{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return controlIndicatorReady{}, false
+	}
+	var ready controlIndicatorReady
+	if err := json.Unmarshal(data, &ready); err != nil {
+		return controlIndicatorReady{}, false
+	}
+	return ready, true
+}
+
+func startControlIndicatorHelper() string {
+	directory := controlIndicatorStateDirectory()
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return ""
+	}
+	scriptPath := filepath.Join(directory, "control-indicator.ps1")
+	scriptData := append([]byte{0xEF, 0xBB, 0xBF}, []byte(windowsIndicatorScript)...)
+	if err := os.WriteFile(scriptPath, scriptData, 0o600); err != nil {
+		return ""
+	}
+	if _, ready := readControlIndicatorReady(directory); ready {
+		return directory
+	}
+
+	cmd := exec.Command(
+		"powershell.exe",
+		"-NoProfile",
+		"-NonInteractive",
+		"-STA",
+		"-WindowStyle",
+		"Hidden",
+		"-ExecutionPolicy",
+		"Bypass",
+		"-File",
+		scriptPath,
+		"-StateDirectory",
+		directory,
+		"-OwnerProcessId",
+		strconv.Itoa(os.Getpid()),
+	)
+	cmd.Stdin = nil
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return ""
+	}
+	_ = cmd.Process.Release()
+	return directory
+}
+
+func prewarmControlIndicator() {
+	if runtime.GOOS != "windows" || !visualIndicatorEnabled() {
+		return
+	}
+	directory := controlIndicatorStateDirectory()
+	if _, err := os.Stat(filepath.Join(directory, "control-state.json")); errors.Is(err, os.ErrNotExist) {
+		_ = writeControlIndicatorState(false, "")
+	}
+	_ = startControlIndicatorHelper()
+}
+
+func showControlIndicator(request psRequest) {
+	if runtime.GOOS != "windows" || !visualIndicatorEnabled() {
+		return
+	}
+	if err := writeControlIndicatorState(true, request.Tool); err != nil {
+		return
+	}
+	directory := startControlIndicatorHelper()
+	if directory == "" {
+		return
+	}
+
+	deadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) {
+		if ready, ok := readControlIndicatorReady(directory); ok && ready.Visible {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func hideControlIndicator() {
+	_ = writeControlIndicatorState(false, "")
+	directory := controlIndicatorStateDirectory()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		ready, ok := readControlIndicatorReady(directory)
+		if !ok || !ready.Visible {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
 func responseErrorText(response *psResponse) string {
 	if response == nil {
 		return "Windows runtime failed."
@@ -863,8 +1091,15 @@ func runPowerShell(request psRequest) (*psResponse, error) {
 	defer os.RemoveAll(tempDir)
 
 	scriptPath := filepath.Join(tempDir, "runtime.ps1")
+	captureHelperPath := filepath.Join(tempDir, "capture_helper.dll")
 	operationPath := filepath.Join(tempDir, "operation.json")
 	if err := os.WriteFile(scriptPath, []byte(windowsRuntimeScript), 0o600); err != nil {
+		return nil, err
+	}
+	if len(windowsCaptureHelper) == 0 {
+		return nil, errors.New("Windows capture helper is missing from the embedded runtime")
+	}
+	if err := os.WriteFile(captureHelperPath, windowsCaptureHelper, 0o600); err != nil {
 		return nil, err
 	}
 	operationData, err := json.Marshal(request)
@@ -878,7 +1113,7 @@ func runPowerShell(request psRequest) (*psResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath, operationPath)
+	cmd := exec.CommandContext(ctx, windowsPowerShellExecutable(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath, operationPath)
 	output, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		if isMutatingTool(request.Tool) {
@@ -902,6 +1137,16 @@ func runPowerShell(request psRequest) (*psResponse, error) {
 		return nil, fmt.Errorf("Windows runtime returned invalid JSON: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return &response, nil
+}
+
+func windowsPowerShellExecutable() string {
+	if windowsDirectory := strings.TrimSpace(os.Getenv("WINDIR")); windowsDirectory != "" {
+		candidate := filepath.Join(windowsDirectory, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return "powershell.exe"
 }
 
 func requiredString(args map[string]any, key string) string {
@@ -1324,6 +1569,7 @@ func windowRefProperty(description string) map[string]any {
 			"ownerHwnd":      stringProperty("Optional owner window handle encoded as a decimal string"),
 			"isModal":        map[string]any{"type": "boolean", "description": "Whether the top-level window has an owner"},
 			"isForeground":   map[string]any{"type": "boolean", "description": "Whether the window was foreground when observed"},
+			"isMinimized":    map[string]any{"type": "boolean", "description": "Whether the window was minimized when observed"},
 			"processStarted": stringProperty("UTC process start time used to derive generation"),
 		},
 		"required":             []string{"appId", "pid", "hwnd", "generation"},
@@ -1386,7 +1632,17 @@ func runCLI(args []string, stdout io.Writer) error {
 	case "mcp":
 		return runMCP(os.Stdin, stdout)
 	case "doctor":
-		fmt.Fprintln(stdout, "Windows runtime: UI Automation and Win32 window-message bridge are available when this process runs in the signed-in desktop session.")
+		fmt.Fprintln(stdout, "Windows runtime: UI Automation, Win32 input, and the click-through control indicator are available when this process runs in the signed-in desktop session.")
+		return nil
+	case "turn-ended":
+		hideControlIndicator()
+		return nil
+	case "indicator-demo":
+		showControlIndicator(psRequest{Tool: "click"})
+		fmt.Fprintln(stdout, "Showing the click-through DeepSeek control indicator for 5 seconds.")
+		time.Sleep(5 * time.Second)
+		hideControlIndicator()
+		time.Sleep(100 * time.Millisecond)
 		return nil
 	case "list-apps":
 		result := newService().callTool("list_apps", map[string]any{})
@@ -1664,6 +1920,7 @@ func readJSONSource(inline, file string) (string, error) {
 }
 
 func runMCP(stdin io.Reader, stdout io.Writer) error {
+	prewarmControlIndicator()
 	svc := newService()
 	decoder := json.NewDecoder(stdin)
 	encoder := json.NewEncoder(stdout)
@@ -1700,7 +1957,10 @@ func handleMCPRequest(request map[string]any, svc *service) map[string]any {
 			"capabilities": map[string]any{"tools": map[string]any{"listChanged": false}},
 			"instructions": serverInstructions,
 		})
-	case "notifications/initialized", "notifications/turn-ended":
+	case "notifications/initialized":
+		return nil
+	case "notifications/turn-ended":
+		hideControlIndicator()
 		return nil
 	case "ping":
 		return jsonRPCResult(id, map[string]any{})
@@ -1750,6 +2010,8 @@ Usage:
 Commands:
   mcp                  Start the stdio MCP server.
   doctor               Print Windows runtime notes.
+  turn-ended           Hide the desktop control indicator and clear transient turn state.
+  indicator-demo       Show the click-through control indicator for 5 seconds.
   list-apps            Print running apps with top-level windows.
   snapshot <app>       Print the current UI Automation snapshot for an app.
   call <tool>           Call one tool, or run a JSON array of tool calls.

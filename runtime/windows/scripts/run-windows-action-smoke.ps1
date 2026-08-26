@@ -211,10 +211,28 @@ try {
         observation_id = $initial.ObservationID
         element_index = $inputElement.Index
         value = "alpha"
+        expected_postcondition = @{ type = "target_value_equals"; value = "alpha" }
     }
     Assert-ToolSuccess $setValue "set_value"
     $afterSet = Get-SnapshotTokens $setValue
     if ($afterSet.Text -notmatch "alpha") { throw "set_value post-action snapshot did not contain alpha" }
+    if ($afterSet.Text -notmatch "ActionStatus: applied" -or $afterSet.Text -notmatch "Postcondition: type=target_value_equals satisfied=true") {
+        throw "Satisfied set_value postcondition was not reported as applied"
+    }
+
+    $inputElement = Get-Element $afterSet.Text "Smoke input"
+    $unknownPostcondition = Invoke-ComputerUseTool "set_value" @{
+        window = $window
+        observation_id = $afterSet.ObservationID
+        element_index = $inputElement.Index
+        value = "alpha"
+        expected_postcondition = @{ type = "target_value_equals"; value = "beta" }
+    }
+    Assert-ToolSuccess $unknownPostcondition "set_value with unmet postcondition"
+    $afterSet = Get-SnapshotTokens $unknownPostcondition
+    if ($afterSet.Text -notmatch "ActionStatus: unknown" -or $afterSet.Text -notmatch "Postcondition: type=target_value_equals satisfied=false") {
+        throw "Unmet set_value postcondition did not downgrade the result to unknown"
+    }
 
     $staleCoordinate = Invoke-ComputerUseTool "click" @{
         window = $window
@@ -242,6 +260,7 @@ try {
         x = $buttonElement.X + [int]($buttonElement.Width / 2)
         y = $buttonElement.Y + [int]($buttonElement.Height / 2)
         click_method = "app_post"
+        expected_postcondition = @{ type = "text_contains"; text = "clicked:alpha" }
     }
     if (-not $movedCoordinate.isError -or $movedCoordinate.content[0].text -notmatch "stale_screenshot\(window_bounds_changed") {
         throw "A screenshot taken before external window movement was not rejected"
@@ -272,6 +291,7 @@ try {
         observation_id = $afterCoordinateClick.ObservationID
         element_index = $inputElement.Index
         action = "SetFocus"
+        expected_postcondition = @{ type = "target_focused" }
     }
     Assert-ToolSuccess $focusInput "focus input"
     $afterFocus = Get-SnapshotTokens $focusInput
@@ -313,6 +333,8 @@ try {
         movedWindowScreenshotRejected = $true
         focusIdentityVerified = $true
         setValueVerified = $true
+        postconditionAppliedVerified = $true
+        postconditionUnknownVerified = $true
         coordinateClickVerified = $true
         typeTextVerified = $true
         pressKeyVerified = $true

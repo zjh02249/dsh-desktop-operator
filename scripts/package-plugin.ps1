@@ -65,6 +65,10 @@ try {
         "package/runtime/windows/capture_helper.cs",
         "package/runtime/windows/indicator.ps1",
         "package/runtime/windows/runtime.ps1",
+        "package/runtime/windows/scripts/run-windows-action-smoke.ps1",
+        "package/runtime/windows/scripts/run-windows-capture-smoke.ps1",
+        "package/runtime/windows/scripts/run-windows-modal-smoke.ps1",
+        "package/runtime/windows/scripts/run-windows-window-smoke.ps1",
         "package/runtime/LICENSE.open-computer-use",
         "package/runtime/THIRD_PARTY_NOTICES.open-computer-use.md"
     )
@@ -123,12 +127,28 @@ try {
             throw "Packaged MCP runtime is missing required tools: $($missingTools -join ', ')"
         }
     } finally {
-        if ($null -ne $mcpProcess -and -not $mcpProcess.HasExited) {
-            try { $mcpProcess.StandardInput.Close() } catch {}
-            if (-not $mcpProcess.WaitForExit(1000)) { $mcpProcess.Kill() }
+        if ($null -ne $mcpProcess) {
+            if (-not $mcpProcess.HasExited) {
+                try { $mcpProcess.StandardInput.Close() } catch {}
+                if (-not $mcpProcess.WaitForExit(3000)) {
+                    $mcpProcess.Kill()
+                    if (-not $mcpProcess.WaitForExit(5000)) {
+                        throw "Packaged MCP verifier did not exit after termination."
+                    }
+                }
+            }
+            $mcpProcess.Dispose()
         }
         if (Test-Path -LiteralPath $verificationRoot) {
-            Remove-Item -LiteralPath $verificationRoot -Recurse -Force
+            for ($attempt = 1; $attempt -le 10; $attempt++) {
+                try {
+                    Remove-Item -LiteralPath $verificationRoot -Recurse -Force -ErrorAction Stop
+                    break
+                } catch {
+                    if ($attempt -eq 10) { throw }
+                    Start-Sleep -Milliseconds 100
+                }
+            }
         }
     }
 

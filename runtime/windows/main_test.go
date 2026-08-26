@@ -48,6 +48,14 @@ func TestWindowToolSchemas(t *testing.T) {
 		if _, ok := properties["window"]; !ok {
 			t.Fatalf("%s should expose window", name)
 		}
+		postcondition, ok := properties["expected_postcondition"].(map[string]any)
+		if !ok || postcondition["type"] != "object" {
+			t.Fatalf("%s should expose the expected_postcondition object", name)
+		}
+		postconditionType := postcondition["properties"].(map[string]any)["type"].(map[string]any)
+		if got := strings.Join(postconditionType["enum"].([]string), ","); got != "target_focused,target_value_equals,text_contains,foreground_window,screenshot_changed" {
+			t.Fatalf("%s expected_postcondition enum = %q", name, got)
+		}
 	}
 
 	clickProperties := findToolDefinition(t, "click").InputSchema["properties"].(map[string]any)
@@ -107,6 +115,31 @@ func TestRequiredActionTarget(t *testing.T) {
 	}
 	if _, err := requiredActionTarget(map[string]any{}); err == nil || err.Error() != "One of app or window is required" {
 		t.Fatalf("missing action target error = %v", err)
+	}
+}
+
+func TestExpectedPostconditionParser(t *testing.T) {
+	condition, err := optionalExpectedPostcondition(map[string]any{
+		"expected_postcondition": map[string]any{"type": " TEXT_CONTAINS ", "text": "ready"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if condition.Type != "text_contains" || condition.Text != "ready" {
+		t.Fatalf("postcondition = %#v", condition)
+	}
+
+	for _, input := range []map[string]any{
+		{"expected_postcondition": "text_contains"},
+		{"expected_postcondition": map[string]any{"type": "not_supported"}},
+		{"expected_postcondition": map[string]any{"type": "target_value_equals"}},
+		{"expected_postcondition": map[string]any{"type": "target_value_equals", "value": 42}},
+		{"expected_postcondition": map[string]any{"type": "text_contains", "text": "  "}},
+		{"expected_postcondition": map[string]any{"type": "text_contains", "text": 42}},
+	} {
+		if _, err := optionalExpectedPostcondition(input); err == nil {
+			t.Fatalf("optionalExpectedPostcondition(%#v) unexpectedly succeeded", input)
+		}
 	}
 }
 
@@ -287,6 +320,64 @@ func TestCoordinateActionForwardsCaptureMappingContract(t *testing.T) {
 	}
 	if request.Capture != capture || request.WindowBounds == nil || request.WindowBounds.X != -400 {
 		t.Fatalf("coordinate action did not preserve screenshot mapping metadata: %#v", request)
+	}
+}
+
+func TestActionPostconditionsAreForwardedAndPreflighted(t *testing.T) {
+	window := windowRef{AppID: "notepad", PID: 42, HWND: "1234", Generation: "42-1234-999"}
+	service := newService()
+	service.rememberSnapshot(snapshotWindowKey(window), &appSnapshot{
+		App:              appDescriptor{Name: "notepad", PID: 42},
+		Window:           &window,
+		ObservationID:    "obs-1",
+		ScreenshotID:     "shot-1",
+		ScreenshotSHA256: "before-sha256",
+		WindowBounds:     &frame{X: 0, Y: 0, Width: 200, Height: 100},
+	})
+	var request psRequest
+	service.runPS = func(input psRequest) (*psResponse, error) {
+		request = input
+		return &psResponse{OK: true, Status: "unknown", Snapshot: &appSnapshot{
+			App:           appDescriptor{Name: "notepad", PID: 42},
+			Window:        &window,
+			ObservationID: "obs-2",
+			ScreenshotID:  "shot-2",
+			Postcondition: &postconditionResult{Type: "screenshot_changed", Satisfied: false, Detail: "screenshot content did not change"},
+		}}, nil
+	}
+
+	x, y := 10.0, 20.0
+	condition := &expectedPostcondition{Type: "screenshot_changed"}
+	result := service.click(actionTarget{Window: &window, ScreenshotID: "shot-1", ExpectedPostcondition: condition}, "", &x, &y, 1, "left", "auto")
+	if result.IsError {
+		t.Fatalf("postcondition click failed: %#v", result)
+	}
+	if request.ExpectedPostcondition != condition || request.BeforeScreenshotSHA256 != "before-sha256" {
+		t.Fatalf("postcondition request = %#v", request)
+	}
+	for _, marker := range []string{"ActionStatus: unknown", "Postcondition: type=screenshot_changed satisfied=false"} {
+		if !strings.Contains(result.Content[0].Text, marker) {
+			t.Fatalf("postcondition result missing %q: %#v", marker, result)
+		}
+	}
+
+	service.rememberSnapshot(snapshotWindowKey(window), &appSnapshot{
+		App:           appDescriptor{Name: "notepad", PID: 42},
+		Window:        &window,
+		ObservationID: "obs-3",
+		ScreenshotID:  "shot-3",
+	})
+	request = psRequest{}
+	result = service.typeText(actionTarget{
+		Window:                &window,
+		ObservationID:         "obs-3",
+		ExpectedPostcondition: &expectedPostcondition{Type: "target_focused"},
+	}, "hello")
+	if !result.IsError || !strings.Contains(result.Content[0].Text, "requires an element-targeted action") {
+		t.Fatalf("non-element postcondition preflight = %#v", result)
+	}
+	if request.Tool != "" {
+		t.Fatalf("invalid postcondition should be rejected before PowerShell: %#v", request)
 	}
 }
 
@@ -564,7 +655,7 @@ func TestWindowsRuntimeWindowIdentityAndActivationContract(t *testing.T) {
 		"function Activate-Window",
 		"function Resolve-ActionContext",
 		"screenshotId = $snapshotID",
-		"actionStatus -NotePropertyValue \"applied\"",
+		"actionStatus -NotePropertyValue $status",
 	} {
 		if !strings.Contains(windowsRuntimeScript, marker) {
 			t.Fatalf("Windows runtime missing window contract marker %q", marker)
@@ -646,6 +737,44 @@ func TestSnapshotRendersExactFocusedElementIdentity(t *testing.T) {
 	for _, marker := range []string{"FocusedElement: index=17", "runtimeId=[42 17]", `automationId="contact-search"`, `name="搜索"`} {
 		if !strings.Contains(text, marker) {
 			t.Fatalf("rendered snapshot should expose exact focused element identity; missing %q in %q", marker, text)
+		}
+	}
+}
+
+func TestSnapshotRendersModalWindowsAndPostcondition(t *testing.T) {
+	snapshot := &appSnapshot{
+		App: appDescriptor{Name: "fixture", PID: 42},
+		ModalWindows: []windowRef{{
+			AppID:      "fixture",
+			PID:        42,
+			HWND:       "200",
+			Title:      "Confirm",
+			Generation: "42-200-1",
+			OwnerHWND:  "100",
+			IsModal:    true,
+		}},
+		ActionStatus:  "unknown",
+		Postcondition: &postconditionResult{Type: "text_contains", Satisfied: false, Detail: "expected text not found"},
+	}
+	text := snapshot.renderedText()
+	for _, marker := range []string{"ModalWindows:", `"title":"Confirm"`, "ActionStatus: unknown", "Postcondition: type=text_contains satisfied=false"} {
+		if !strings.Contains(text, marker) {
+			t.Fatalf("rendered snapshot missing %q in %q", marker, text)
+		}
+	}
+}
+
+func TestWindowsRuntimeModalAndPostconditionContracts(t *testing.T) {
+	for _, marker := range []string{
+		"function Get-BlockingModalWindows",
+		"modal_window_required",
+		"modalWindows = $modalWindows",
+		"function Test-ExpectedPostcondition",
+		"screenshotSha256 = $screenshotSha256",
+		`{ "unknown" } else { "applied" }`,
+	} {
+		if !strings.Contains(windowsRuntimeScript, marker) {
+			t.Fatalf("Windows modal/postcondition contract missing %q", marker)
 		}
 	}
 }

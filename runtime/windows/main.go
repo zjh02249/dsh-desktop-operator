@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var version = "0.6.0"
+var version = "0.7.0"
 
 var clickMethodValues = []string{"auto", "accessibility", "app_post", "sky_click", "global"}
 
@@ -30,7 +30,7 @@ var windowsIndicatorScript string
 //go:embed capture_helper.dll
 var windowsCaptureHelper []byte
 
-const serverInstructions = "Computer Use tools let you interact with Windows apps by performing UI actions.\n\nFor the window-level v2 flow, call `list_windows`, resolve exactly one target with `get_window`, call `activate_window` when foreground input is required, and observe it with `get_window_state`. The legacy `get_app_state` tool remains a compatibility adapter for app-name workflows.\n\nPrefer element-targeted interactions over coordinate clicks when an index for the targeted element is available. For editable controls, use `perform_secondary_action` with `SetFocus` when exposed, verify the returned `FocusedElement` identity, then use `set_value`; the runtime verifies the value after applying it. Observe again after every action and never reuse a WindowRef after `stale_window`. Window-scoped v2 actions verify the exact foreground HWND and use UI Automation or SendInput; coordinate actions reject non-target occlusion. Legacy app-name actions retain their best-effort window-message fallback. The Windows runtime does not auto-launch apps or enable legacy UIA focus/text fallbacks by default; these remain explicit runtime capabilities."
+const serverInstructions = "Computer Use tools let you interact with Windows apps by performing UI actions.\n\nFor the window-level v2 flow, call `list_windows`, resolve exactly one target with `get_window`, call `activate_window` when foreground input is required, and observe it with `get_window_state`. The legacy `get_app_state` tool remains a compatibility adapter for app-name workflows. If a snapshot exposes `ModalWindows`, or activation returns `modal_window_required`, target the blocking modal WindowRef instead of continuing against its disabled owner.\n\nPrefer element-targeted interactions over coordinate clicks when an index for the targeted element is available. For editable controls, use `perform_secondary_action` with `SetFocus` when exposed, verify the returned `FocusedElement` identity, then use `set_value`; the runtime verifies the value after applying it. Use `expected_postcondition` when a mutating action has an observable outcome; an unmet check returns `ActionStatus: unknown`, which is not verified success and must not trigger a blind retry of a side-effecting action. Observe again after every action and never reuse a WindowRef after `stale_window`. Window-scoped v2 actions verify the exact foreground HWND and use UI Automation or SendInput; coordinate actions reject non-target occlusion. Legacy app-name actions retain their best-effort window-message fallback. The Windows runtime does not auto-launch apps or enable legacy UIA focus/text fallbacks by default; these remain explicit runtime capabilities."
 
 type toolDefinition struct {
 	Name        string         `json:"name"`
@@ -98,6 +98,18 @@ type captureDescriptor struct {
 	VirtualScreen        *frame  `json:"virtualScreen,omitempty"`
 }
 
+type expectedPostcondition struct {
+	Type  string `json:"type"`
+	Value string `json:"value,omitempty"`
+	Text  string `json:"text,omitempty"`
+}
+
+type postconditionResult struct {
+	Type      string `json:"type"`
+	Satisfied bool   `json:"satisfied"`
+	Detail    string `json:"detail,omitempty"`
+}
+
 func (f frame) renderedLocalFrame() string {
 	return fmt.Sprintf("{{x: %.0f, y: %.0f, width: %.0f, height: %.0f}}", f.X, f.Y, f.Width, f.Height)
 }
@@ -123,22 +135,25 @@ type elementRecord struct {
 }
 
 type appSnapshot struct {
-	App                 appDescriptor      `json:"app"`
-	Window              *windowRef         `json:"window,omitempty"`
-	ObservationID       string             `json:"observationId,omitempty"`
-	ScreenshotID        string             `json:"screenshotId,omitempty"`
-	ActionStatus        string             `json:"actionStatus,omitempty"`
-	WindowTitle         string             `json:"windowTitle,omitempty"`
-	WindowBounds        *frame             `json:"windowBounds,omitempty"`
-	Capture             *captureDescriptor `json:"capture,omitempty"`
-	ScreenshotPNGBase64 string             `json:"screenshotPngBase64,omitempty"`
-	TreeLines           []string           `json:"treeLines,omitempty"`
-	FocusedSummary      string             `json:"focusedSummary,omitempty"`
-	FocusedElement      *elementRecord     `json:"focusedElement,omitempty"`
-	SelectedText        string             `json:"selectedText,omitempty"`
-	SelectedElements    []elementRecord    `json:"selectedElements,omitempty"`
-	DocumentText        string             `json:"documentText,omitempty"`
-	Elements            []elementRecord    `json:"elements,omitempty"`
+	App                 appDescriptor        `json:"app"`
+	Window              *windowRef           `json:"window,omitempty"`
+	ObservationID       string               `json:"observationId,omitempty"`
+	ScreenshotID        string               `json:"screenshotId,omitempty"`
+	ActionStatus        string               `json:"actionStatus,omitempty"`
+	Postcondition       *postconditionResult `json:"postcondition,omitempty"`
+	WindowTitle         string               `json:"windowTitle,omitempty"`
+	WindowBounds        *frame               `json:"windowBounds,omitempty"`
+	ModalWindows        []windowRef          `json:"modalWindows,omitempty"`
+	Capture             *captureDescriptor   `json:"capture,omitempty"`
+	ScreenshotPNGBase64 string               `json:"screenshotPngBase64,omitempty"`
+	ScreenshotSHA256    string               `json:"screenshotSha256,omitempty"`
+	TreeLines           []string             `json:"treeLines,omitempty"`
+	FocusedSummary      string               `json:"focusedSummary,omitempty"`
+	FocusedElement      *elementRecord       `json:"focusedElement,omitempty"`
+	SelectedText        string               `json:"selectedText,omitempty"`
+	SelectedElements    []elementRecord      `json:"selectedElements,omitempty"`
+	DocumentText        string               `json:"documentText,omitempty"`
+	Elements            []elementRecord      `json:"elements,omitempty"`
 }
 
 func (s *appSnapshot) renderedText() string {
@@ -170,6 +185,18 @@ func (s *appSnapshot) renderedText() string {
 	}
 	if s.ActionStatus != "" {
 		lines = append(lines, fmt.Sprintf("ActionStatus: %s", s.ActionStatus))
+	}
+	if s.Postcondition != nil {
+		lines = append(lines, fmt.Sprintf(
+			"Postcondition: type=%s satisfied=%t detail=%s",
+			s.Postcondition.Type,
+			s.Postcondition.Satisfied,
+			strconv.Quote(s.Postcondition.Detail),
+		))
+	}
+	if len(s.ModalWindows) > 0 {
+		modalJSON, _ := json.Marshal(s.ModalWindows)
+		lines = append(lines, fmt.Sprintf("ModalWindows: %s", modalJSON))
 	}
 	if s.Capture != nil {
 		lines = append(lines, fmt.Sprintf(
@@ -229,33 +256,35 @@ func (s *appSnapshot) result() toolCallResult {
 }
 
 type psRequest struct {
-	Tool          string             `json:"tool"`
-	App           string             `json:"app,omitempty"`
-	Title         string             `json:"title,omitempty"`
-	Window        *windowRef         `json:"window,omitempty"`
-	Element       *elementRecord     `json:"element,omitempty"`
-	X             *float64           `json:"x,omitempty"`
-	Y             *float64           `json:"y,omitempty"`
-	FromX         *float64           `json:"from_x,omitempty"`
-	FromY         *float64           `json:"from_y,omitempty"`
-	ToX           *float64           `json:"to_x,omitempty"`
-	ToY           *float64           `json:"to_y,omitempty"`
-	ClickCount    int                `json:"click_count,omitempty"`
-	MouseButton   string             `json:"mouse_button,omitempty"`
-	ClickMethod   string             `json:"click_method,omitempty"`
-	Action        string             `json:"action,omitempty"`
-	Direction     string             `json:"direction,omitempty"`
-	Pages         float64            `json:"pages,omitempty"`
-	Text          string             `json:"text,omitempty"`
-	Key           string             `json:"key,omitempty"`
-	Value         string             `json:"value,omitempty"`
-	ObservationID string             `json:"observation_id,omitempty"`
-	ScreenshotID  string             `json:"screenshot_id,omitempty"`
-	WindowBounds  *frame             `json:"windowBounds,omitempty"`
-	Capture       *captureDescriptor `json:"capture,omitempty"`
-	TextLimit     any                `json:"text_limit,omitempty"`
-	MaxTreeNodes  int                `json:"max_tree_nodes,omitempty"`
-	MaxTreeDepth  int                `json:"max_tree_depth,omitempty"`
+	Tool                   string                 `json:"tool"`
+	App                    string                 `json:"app,omitempty"`
+	Title                  string                 `json:"title,omitempty"`
+	Window                 *windowRef             `json:"window,omitempty"`
+	Element                *elementRecord         `json:"element,omitempty"`
+	X                      *float64               `json:"x,omitempty"`
+	Y                      *float64               `json:"y,omitempty"`
+	FromX                  *float64               `json:"from_x,omitempty"`
+	FromY                  *float64               `json:"from_y,omitempty"`
+	ToX                    *float64               `json:"to_x,omitempty"`
+	ToY                    *float64               `json:"to_y,omitempty"`
+	ClickCount             int                    `json:"click_count,omitempty"`
+	MouseButton            string                 `json:"mouse_button,omitempty"`
+	ClickMethod            string                 `json:"click_method,omitempty"`
+	Action                 string                 `json:"action,omitempty"`
+	Direction              string                 `json:"direction,omitempty"`
+	Pages                  float64                `json:"pages,omitempty"`
+	Text                   string                 `json:"text,omitempty"`
+	Key                    string                 `json:"key,omitempty"`
+	Value                  string                 `json:"value,omitempty"`
+	ObservationID          string                 `json:"observation_id,omitempty"`
+	ScreenshotID           string                 `json:"screenshot_id,omitempty"`
+	WindowBounds           *frame                 `json:"windowBounds,omitempty"`
+	Capture                *captureDescriptor     `json:"capture,omitempty"`
+	ExpectedPostcondition  *expectedPostcondition `json:"expected_postcondition,omitempty"`
+	BeforeScreenshotSHA256 string                 `json:"before_screenshot_sha256,omitempty"`
+	TextLimit              any                    `json:"text_limit,omitempty"`
+	MaxTreeNodes           int                    `json:"max_tree_nodes,omitempty"`
+	MaxTreeDepth           int                    `json:"max_tree_depth,omitempty"`
 }
 
 type textLimit struct {
@@ -297,10 +326,11 @@ type controlIndicatorReady struct {
 }
 
 type actionTarget struct {
-	App           string
-	Window        *windowRef
-	ObservationID string
-	ScreenshotID  string
+	App                   string
+	Window                *windowRef
+	ObservationID         string
+	ScreenshotID          string
+	ExpectedPostcondition *expectedPostcondition
 }
 
 type actionSnapshotRequirement int
@@ -609,18 +639,19 @@ func (s *service) click(target actionTarget, elementIndex string, x, y *float64,
 	}
 	snapshot := resolved.snapshot
 	request := psRequest{
-		Tool:          "click",
-		App:           resolved.app,
-		Window:        resolved.window,
-		X:             x,
-		Y:             y,
-		ClickCount:    clickCount,
-		MouseButton:   mouseButton,
-		ClickMethod:   clickMethod,
-		ObservationID: target.ObservationID,
-		ScreenshotID:  target.ScreenshotID,
-		WindowBounds:  snapshot.WindowBounds,
-		Capture:       snapshot.Capture,
+		Tool:                  "click",
+		App:                   resolved.app,
+		Window:                resolved.window,
+		X:                     x,
+		Y:                     y,
+		ClickCount:            clickCount,
+		MouseButton:           mouseButton,
+		ClickMethod:           clickMethod,
+		ObservationID:         target.ObservationID,
+		ScreenshotID:          target.ScreenshotID,
+		WindowBounds:          snapshot.WindowBounds,
+		Capture:               snapshot.Capture,
+		ExpectedPostcondition: target.ExpectedPostcondition,
 	}
 	if elementIndex != "" {
 		record, err := lookupElement(snapshot, elementIndex)
@@ -648,12 +679,13 @@ func (s *service) performSecondaryAction(target actionTarget, elementIndex, acti
 		return textResult(err.Error(), true)
 	}
 	return s.actionResult(resolved.cacheKey, psRequest{
-		Tool:          "perform_secondary_action",
-		App:           resolved.app,
-		Window:        resolved.window,
-		Element:       record,
-		Action:        action,
-		ObservationID: target.ObservationID,
+		Tool:                  "perform_secondary_action",
+		App:                   resolved.app,
+		Window:                resolved.window,
+		Element:               record,
+		Action:                action,
+		ObservationID:         target.ObservationID,
+		ExpectedPostcondition: target.ExpectedPostcondition,
 	})
 }
 
@@ -677,13 +709,14 @@ func (s *service) scroll(target actionTarget, direction, elementIndex string, pa
 		return textResult(err.Error(), true)
 	}
 	return s.actionResult(resolved.cacheKey, psRequest{
-		Tool:          "scroll",
-		App:           resolved.app,
-		Window:        resolved.window,
-		Element:       record,
-		Direction:     normalized,
-		Pages:         pages,
-		ObservationID: target.ObservationID,
+		Tool:                  "scroll",
+		App:                   resolved.app,
+		Window:                resolved.window,
+		Element:               record,
+		Direction:             normalized,
+		Pages:                 pages,
+		ObservationID:         target.ObservationID,
+		ExpectedPostcondition: target.ExpectedPostcondition,
 	})
 }
 
@@ -705,16 +738,17 @@ func (s *service) drag(target actionTarget, fromX, fromY, toX, toY *float64) too
 		return textResult(err.Error(), true)
 	}
 	return s.actionResult(resolved.cacheKey, psRequest{
-		Tool:         "drag",
-		App:          resolved.app,
-		Window:       resolved.window,
-		FromX:        fromX,
-		FromY:        fromY,
-		ToX:          toX,
-		ToY:          toY,
-		ScreenshotID: target.ScreenshotID,
-		WindowBounds: resolved.snapshot.WindowBounds,
-		Capture:      resolved.snapshot.Capture,
+		Tool:                  "drag",
+		App:                   resolved.app,
+		Window:                resolved.window,
+		FromX:                 fromX,
+		FromY:                 fromY,
+		ToX:                   toX,
+		ToY:                   toY,
+		ScreenshotID:          target.ScreenshotID,
+		WindowBounds:          resolved.snapshot.WindowBounds,
+		Capture:               resolved.snapshot.Capture,
+		ExpectedPostcondition: target.ExpectedPostcondition,
 	})
 }
 
@@ -727,11 +761,12 @@ func (s *service) typeText(target actionTarget, text string) toolCallResult {
 		return textResult(err.Error(), true)
 	}
 	return s.actionResult(resolved.cacheKey, psRequest{
-		Tool:          "type_text",
-		App:           resolved.app,
-		Window:        resolved.window,
-		Text:          text,
-		ObservationID: target.ObservationID,
+		Tool:                  "type_text",
+		App:                   resolved.app,
+		Window:                resolved.window,
+		Text:                  text,
+		ObservationID:         target.ObservationID,
+		ExpectedPostcondition: target.ExpectedPostcondition,
 	})
 }
 
@@ -744,11 +779,12 @@ func (s *service) pressKey(target actionTarget, key string) toolCallResult {
 		return textResult(err.Error(), true)
 	}
 	return s.actionResult(resolved.cacheKey, psRequest{
-		Tool:          "press_key",
-		App:           resolved.app,
-		Window:        resolved.window,
-		Key:           key,
-		ObservationID: target.ObservationID,
+		Tool:                  "press_key",
+		App:                   resolved.app,
+		Window:                resolved.window,
+		Key:                   key,
+		ObservationID:         target.ObservationID,
+		ExpectedPostcondition: target.ExpectedPostcondition,
 	})
 }
 
@@ -765,16 +801,34 @@ func (s *service) setValue(target actionTarget, elementIndex, value string) tool
 		return textResult(err.Error(), true)
 	}
 	return s.actionResult(resolved.cacheKey, psRequest{
-		Tool:          "set_value",
-		App:           resolved.app,
-		Window:        resolved.window,
-		Element:       record,
-		Value:         value,
-		ObservationID: target.ObservationID,
+		Tool:                  "set_value",
+		App:                   resolved.app,
+		Window:                resolved.window,
+		Element:               record,
+		Value:                 value,
+		ObservationID:         target.ObservationID,
+		ExpectedPostcondition: target.ExpectedPostcondition,
 	})
 }
 
 func (s *service) actionResult(cacheKey string, request psRequest) toolCallResult {
+	if condition := request.ExpectedPostcondition; condition != nil {
+		before := s.snapshots[cacheKey]
+		if before == nil {
+			return textResult("expected_postcondition requires a current snapshot", true)
+		}
+		switch condition.Type {
+		case "target_focused", "target_value_equals":
+			if request.Element == nil {
+				return textResult("expected_postcondition "+condition.Type+" requires an element-targeted action", true)
+			}
+		case "screenshot_changed":
+			if strings.TrimSpace(before.ScreenshotSHA256) == "" {
+				return textResult("expected_postcondition screenshot_changed requires a captured screenshot", true)
+			}
+			request.BeforeScreenshotSHA256 = before.ScreenshotSHA256
+		}
+	}
 	snapshot, result := s.refreshSnapshot(cacheKey, request)
 	if result.IsError {
 		return result
@@ -1208,12 +1262,55 @@ func requiredActionTarget(args map[string]any) (actionTarget, error) {
 	if window == nil && app == "" {
 		return actionTarget{}, errors.New("One of app or window is required")
 	}
+	expectedPostcondition, err := optionalExpectedPostcondition(args)
+	if err != nil {
+		return actionTarget{}, err
+	}
 	return actionTarget{
-		App:           app,
-		Window:        window,
-		ObservationID: requiredString(args, "observation_id"),
-		ScreenshotID:  requiredString(args, "screenshot_id"),
+		App:                   app,
+		Window:                window,
+		ObservationID:         requiredString(args, "observation_id"),
+		ScreenshotID:          requiredString(args, "screenshot_id"),
+		ExpectedPostcondition: expectedPostcondition,
 	}, nil
+}
+
+func optionalExpectedPostcondition(args map[string]any) (*expectedPostcondition, error) {
+	raw, exists := args["expected_postcondition"]
+	if !exists || raw == nil {
+		return nil, nil
+	}
+	value, ok := raw.(map[string]any)
+	if !ok {
+		return nil, errors.New("expected_postcondition must be an object")
+	}
+	typeName, _ := value["type"].(string)
+	typeName = strings.ToLower(strings.TrimSpace(typeName))
+	condition := &expectedPostcondition{Type: typeName}
+	condition.Value, _ = value["value"].(string)
+	condition.Text, _ = value["text"].(string)
+	switch typeName {
+	case "target_focused", "foreground_window", "screenshot_changed":
+		return condition, nil
+	case "target_value_equals":
+		if _, ok := value["value"]; !ok {
+			return nil, errors.New("expected_postcondition target_value_equals requires value")
+		}
+		if _, ok := value["value"].(string); !ok {
+			return nil, errors.New("expected_postcondition target_value_equals value must be a string")
+		}
+		return condition, nil
+	case "text_contains":
+		if _, ok := value["text"].(string); !ok {
+			return nil, errors.New("expected_postcondition text_contains text must be a string")
+		}
+		if strings.TrimSpace(condition.Text) == "" {
+			return nil, errors.New("expected_postcondition text_contains requires non-empty text")
+		}
+		return condition, nil
+	default:
+		return nil, fmt.Errorf("unsupported expected_postcondition type %q", typeName)
+	}
 }
 
 func optionalElementIndex(args map[string]any) string {
@@ -1391,16 +1488,17 @@ func toolDefinitions() []toolDefinition {
 			Description: "Click an element by index or pixel coordinates from screenshot. Prefer window-level v2 calls with WindowRef plus observation_id or screenshot_id. This tool is part of plugin `Computer Use`.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
-				"app":            stringProperty("Legacy app name or bundle identifier fallback"),
-				"window":         windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
-				"element_index":  stringProperty("Element index to click"),
-				"observation_id": stringProperty("Required with window+element_index. Must match the latest snapshot for that WindowRef"),
-				"screenshot_id":  stringProperty("Required with window+x/y coordinates. Must match the latest screenshot for that WindowRef"),
-				"x":              numberProperty("X coordinate in screenshot pixel coordinates"),
-				"y":              numberProperty("Y coordinate in screenshot pixel coordinates"),
-				"click_count":    integerProperty("Number of clicks. Defaults to 1"),
-				"mouse_button":   enumStringProperty("Mouse button to click. Defaults to left.", []string{"left", "right", "middle"}),
-				"click_method":   enumStringProperty("Click implementation: auto (default), accessibility, app_post, sky_click, or global. Accessibility requires element_index. Windows supports app_post through HWND messages and does not currently support sky_click or global.", clickMethodValues),
+				"app":                    stringProperty("Legacy app name or bundle identifier fallback"),
+				"window":                 windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
+				"element_index":          stringProperty("Element index to click"),
+				"observation_id":         stringProperty("Required with window+element_index. Must match the latest snapshot for that WindowRef"),
+				"screenshot_id":          stringProperty("Required with window+x/y coordinates. Must match the latest screenshot for that WindowRef"),
+				"x":                      numberProperty("X coordinate in screenshot pixel coordinates"),
+				"y":                      numberProperty("Y coordinate in screenshot pixel coordinates"),
+				"click_count":            integerProperty("Number of clicks. Defaults to 1"),
+				"mouse_button":           enumStringProperty("Mouse button to click. Defaults to left.", []string{"left", "right", "middle"}),
+				"click_method":           enumStringProperty("Click implementation: auto (default), accessibility, app_post, sky_click, or global. Accessibility requires element_index. Windows supports app_post through HWND messages and does not currently support sky_click or global.", clickMethodValues),
+				"expected_postcondition": postconditionProperty(),
 			}, nil),
 		},
 		{
@@ -1408,13 +1506,14 @@ func toolDefinitions() []toolDefinition {
 			Description: "Drag from one point to another using pixel coordinates. Prefer window-level v2 calls with WindowRef and screenshot_id. This tool is part of plugin `Computer Use`.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
-				"app":           stringProperty("Legacy app name or bundle identifier fallback"),
-				"window":        windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
-				"screenshot_id": stringProperty("Required with window. Must match the latest screenshot for that WindowRef"),
-				"from_x":        numberProperty("Start X coordinate"),
-				"from_y":        numberProperty("Start Y coordinate"),
-				"to_x":          numberProperty("End X coordinate"),
-				"to_y":          numberProperty("End Y coordinate"),
+				"app":                    stringProperty("Legacy app name or bundle identifier fallback"),
+				"window":                 windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
+				"screenshot_id":          stringProperty("Required with window. Must match the latest screenshot for that WindowRef"),
+				"from_x":                 numberProperty("Start X coordinate"),
+				"from_y":                 numberProperty("Start Y coordinate"),
+				"to_x":                   numberProperty("End X coordinate"),
+				"to_y":                   numberProperty("End Y coordinate"),
+				"expected_postcondition": postconditionProperty(),
 			}, []string{"from_x", "from_y", "to_x", "to_y"}),
 		},
 		{
@@ -1475,11 +1574,12 @@ func toolDefinitions() []toolDefinition {
 			Description: "Invoke a secondary accessibility action exposed by an element. This tool is part of plugin `Computer Use`.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
-				"app":            stringProperty("Legacy app name or bundle identifier fallback"),
-				"window":         windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
-				"element_index":  stringProperty("Element identifier"),
-				"observation_id": stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
-				"action":         stringProperty("Secondary accessibility action name"),
+				"app":                    stringProperty("Legacy app name or bundle identifier fallback"),
+				"window":                 windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
+				"element_index":          stringProperty("Element identifier"),
+				"observation_id":         stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
+				"action":                 stringProperty("Secondary accessibility action name"),
+				"expected_postcondition": postconditionProperty(),
 			}, []string{"element_index", "action"}),
 		},
 		{
@@ -1487,10 +1587,11 @@ func toolDefinitions() []toolDefinition {
 			Description: "Press a key or key-combination on the keyboard, including modifier and navigation keys.\n  - This supports xdotool's `key` syntax.\n  - Examples: \"a\", \"Return\", \"Tab\", \"super+c\", \"Up\", \"KP_0\" (for the numpad 0). This tool is part of plugin `Computer Use`.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
-				"app":            stringProperty("Legacy app name or bundle identifier fallback"),
-				"window":         windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
-				"observation_id": stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
-				"key":            stringProperty("Key or key-combination to press"),
+				"app":                    stringProperty("Legacy app name or bundle identifier fallback"),
+				"window":                 windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
+				"observation_id":         stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
+				"key":                    stringProperty("Key or key-combination to press"),
+				"expected_postcondition": postconditionProperty(),
 			}, []string{"key"}),
 		},
 		{
@@ -1498,12 +1599,13 @@ func toolDefinitions() []toolDefinition {
 			Description: "Scroll an element in a direction by a number of pages. This tool is part of plugin `Computer Use`.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
-				"app":            stringProperty("Legacy app name or bundle identifier fallback"),
-				"window":         windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
-				"direction":      stringProperty("Scroll direction: up, down, left, or right"),
-				"element_index":  stringProperty("Element identifier"),
-				"observation_id": stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
-				"pages":          numberProperty("Number of pages to scroll. Fractional values are supported. Defaults to 1"),
+				"app":                    stringProperty("Legacy app name or bundle identifier fallback"),
+				"window":                 windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
+				"direction":              stringProperty("Scroll direction: up, down, left, or right"),
+				"element_index":          stringProperty("Element identifier"),
+				"observation_id":         stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
+				"pages":                  numberProperty("Number of pages to scroll. Fractional values are supported. Defaults to 1"),
+				"expected_postcondition": postconditionProperty(),
 			}, []string{"element_index", "direction"}),
 		},
 		{
@@ -1511,11 +1613,12 @@ func toolDefinitions() []toolDefinition {
 			Description: "Set the value of a settable accessibility element. This tool is part of plugin `Computer Use`.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
-				"app":            stringProperty("Legacy app name or bundle identifier fallback"),
-				"window":         windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
-				"element_index":  stringProperty("Element identifier"),
-				"observation_id": stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
-				"value":          stringProperty("Value to assign"),
+				"app":                    stringProperty("Legacy app name or bundle identifier fallback"),
+				"window":                 windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
+				"element_index":          stringProperty("Element identifier"),
+				"observation_id":         stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
+				"value":                  stringProperty("Value to assign"),
+				"expected_postcondition": postconditionProperty(),
 			}, []string{"element_index", "value"}),
 		},
 		{
@@ -1523,10 +1626,11 @@ func toolDefinitions() []toolDefinition {
 			Description: "Type literal text using keyboard input. This tool is part of plugin `Computer Use`.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
-				"app":            stringProperty("Legacy app name or bundle identifier fallback"),
-				"window":         windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
-				"observation_id": stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
-				"text":           stringProperty("Literal text to type"),
+				"app":                    stringProperty("Legacy app name or bundle identifier fallback"),
+				"window":                 windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
+				"observation_id":         stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
+				"text":                   stringProperty("Literal text to type"),
+				"expected_postcondition": postconditionProperty(),
 			}, []string{"text"}),
 		},
 	}
@@ -1602,6 +1706,20 @@ func textLimitProperty(description string) map[string]any {
 			map[string]any{"type": "string", "enum": []string{"max"}},
 		},
 		"description": description,
+	}
+}
+
+func postconditionProperty() map[string]any {
+	return map[string]any{
+		"type":        "object",
+		"description": "Optional post-action check. An unsatisfied check returns ActionStatus unknown instead of claiming success.",
+		"properties": map[string]any{
+			"type":  enumStringProperty("Postcondition kind.", []string{"target_focused", "target_value_equals", "text_contains", "foreground_window", "screenshot_changed"}),
+			"value": stringProperty("Exact target value required by target_value_equals."),
+			"text":  stringProperty("Case-insensitive text required by text_contains."),
+		},
+		"required":             []string{"type"},
+		"additionalProperties": false,
 	}
 }
 

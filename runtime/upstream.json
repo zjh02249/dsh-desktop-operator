@@ -3,5 +3,5 @@
   "baseCommit": "ead48da2032c69b892c89fd39d38fa587b4d6fbf",
   "importedAt": "2026-08-26",
   "scope": "apps/OpenComputerUseWindows plus Windows smoke tests and licensing files",
-  "sourceState": "base commit plus the DSH WindowRef, generation validation, foreground SendInput, action smoke, and Add-Type retry changes maintained in this plugin"
+  "sourceState": "base commit plus the DSH WindowRef, generation validation, foreground SendInput, WGC/DPI capture, modal recovery, postcondition verification, smoke, and lifecycle changes maintained in this plugin"
 }

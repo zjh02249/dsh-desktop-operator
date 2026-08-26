@@ -1,7 +1,7 @@
 # DSH Computer Use：Codex 级 Windows 桌面控制长期路线
 
 日期：2026-08-26
-状态：实施中；M1 窗口身份、M3 首版前台 `SendInput`、M5a 代次拒绝、M6a DSH 前台模式、M8a 单包集成已落地
+状态：实施中；M1 窗口身份、M3 首版前台 `SendInput`、M5a 代次拒绝／模态恢复／后置条件、M6a DSH 前台模式、M8a 单包集成已落地
 范围：Windows 优先；DeepSeek Harness 集成；功能等效复刻，不复制未公开的 OpenAI 私有代码
 
 ## 1. 需求摘要与目标边界
@@ -35,7 +35,7 @@ OpenAI 的 [Computer use 官方指南](https://developers.openai.com/api/docs/gu
 - Windows 的 `global` 与 `sky_click` 点击仍被明确拒绝，避免把其他平台的输入语义错误套用到 Windows。
 - legacy 应用名入口仍保留 `PostMessage` / `SendMessage` 兼容；窗口级 v2 已改为前台验证后的 `SendInput`。
 - UIA `SetFocus`、文本回退和应用启动仍由插件配置映射成显式环境开关。
-- `actionResult` 已有窗口、焦点与快照代次校验，但业务后置条件 DSL 仍未完成。
+- `actionResult` 已有窗口、焦点与快照代次校验，并实现首版业务后置条件 DSL；更复杂的组合条件与窗口关闭条件仍待后续扩展。
 
 ### 实施前 DSH 插件基线
 
@@ -145,7 +145,9 @@ ActionResult
 - 已把编译期 C# WinRT/D3D 帮助程序嵌入单个 Go runtime，以 Windows.Graphics.Capture 作为截图主路径；完全遮挡的 WPF 窗口仍能读取目标洋红色内容，快照同时暴露捕获来源和诊断降级状态。
 - 已声明并验证 Per-Monitor-V2 DPI awareness，快照分别返回显示器有效 DPI、窗口 DPI、物理坐标空间和虚拟桌面边界；视觉坐标按截图／窗口比例映射，越界坐标和窗口移动后的旧截图会在输入前拒绝。
 - 已让最小化窗口返回显式不可捕获状态，并验证 `activate_window → fresh get_window_state` 能恢复 WGC 捕获；当前 200% DPI 实机 smoke 通过。
-- 下一切片：完整多屏／负坐标／其他 DPI 机器矩阵、模态恢复、业务后置条件 DSL、动作风险分类确认、真实应用矩阵与正式打包签名。
+- 已实现模态恢复安全边界：快照返回 `ModalWindows`，已被模态窗口禁用的 owner 会以 `modal_window_required` 拒绝激活并返回精确候选；WinForms owner/modal 实机 smoke 已通过。
+- 已实现首版 `expected_postcondition`：支持焦点、值、文本、前台窗口和截图变化验证；不满足时返回 `ActionStatus: unknown`，并已在 WPF 实机 smoke 中覆盖 satisfied/unknown 两条路径。
+- 下一切片：完整多屏／负坐标／其他 DPI 机器矩阵、动作风险分类确认、组合／窗口关闭后置条件、真实应用矩阵与正式打包签名。
 
 ### M0：基线、工具链与回归夹具
 

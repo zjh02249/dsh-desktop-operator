@@ -418,6 +418,25 @@ function Get-WindowRecords([string]$appFilter = "") {
     return $records.ToArray()
 }
 
+function Get-BlockingModalWindows($window) {
+    if ($null -eq $window -or [string]::IsNullOrWhiteSpace([string]$window.hwnd)) {
+        return @()
+    }
+    $records = @(Get-WindowRecords)
+    $owners = New-Object 'System.Collections.Generic.HashSet[string]'
+    [void]$owners.Add([string]$window.hwnd)
+    $blocking = New-Object System.Collections.Generic.List[object]
+    for ($depth = 0; $depth -lt 8; $depth++) {
+        $next = @($records | Where-Object { $_.isModal -and $owners.Contains([string]$_.ownerHwnd) -and -not $owners.Contains([string]$_.hwnd) })
+        if ($next.Count -eq 0) { break }
+        foreach ($candidate in $next) {
+            $blocking.Add($candidate)
+            [void]$owners.Add([string]$candidate.hwnd)
+        }
+    }
+    return $blocking.ToArray()
+}
+
 function Format-WindowsText($records) {
     $items = @($records)
     if ($items.Count -eq 0) { return "" }
@@ -502,6 +521,10 @@ function Launch-AppWindow([string]$app) {
 
 function Activate-Window($windowRef) {
     $window = Resolve-WindowRef $windowRef
+    $blockingModalWindows = @(Get-BlockingModalWindows $window)
+    if ($blockingModalWindows.Count -gt 0) {
+        throw "modal_window_required(owner=$($window.hwnd), candidates=$(Format-WindowsText $blockingModalWindows))"
+    }
     $hwndValue = 0L
     if (-not [long]::TryParse($window.hwnd, [ref]$hwndValue)) {
         throw "invalid_window_ref(hwnd must be a decimal string)"
@@ -1252,6 +1275,17 @@ function Add-CaptureWarning([string]$existing, [string]$next) {
     return "$existing; $next"
 }
 
+function Get-Base64Sha256([string]$base64) {
+    if ([string]::IsNullOrWhiteSpace($base64)) { return "" }
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [Convert]::FromBase64String($base64)
+        return (($sha256.ComputeHash($bytes) | ForEach-Object { $_.ToString("x2") }) -join "")
+    } finally {
+        $sha256.Dispose()
+    }
+}
+
 function Capture-WindowPng([IntPtr]$hwnd, $bounds) {
     if ($null -eq $bounds -or $bounds.width -le 0 -or $bounds.height -le 0) {
         return [pscustomobject]@{
@@ -1429,6 +1463,8 @@ function Build-Snapshot([string]$query, $TextLimit = $script:DefaultTextLimit, [
     $focusedElement = Get-FocusedElementRecord $process.Id $bounds $rendered.records $TextLimit
     $selectedElements = @($rendered.records | Where-Object { $_.isSelected })
     $capture = Capture-WindowPng $hwnd $bounds
+    $screenshotSha256 = Get-Base64Sha256 $capture.pngBase64
+    $modalWindows = @(Get-BlockingModalWindows $window)
     $snapshotID = ("{0}:{1}" -f $window.generation, [DateTime]::UtcNow.Ticks)
     [pscustomobject]@{
         app = [pscustomobject]@{
@@ -1441,8 +1477,10 @@ function Build-Snapshot([string]$query, $TextLimit = $script:DefaultTextLimit, [
         screenshotId = $snapshotID
         windowTitle = Limit-Text $window.title $TextLimit
         windowBounds = $bounds
+        modalWindows = $modalWindows
         capture = $capture.descriptor
         screenshotPngBase64 = $capture.pngBase64
+        screenshotSha256 = $screenshotSha256
         treeLines = @($rendered.lines)
         focusedSummary = Get-FocusedSummary $process.Id $TextLimit
         focusedElement = $focusedElement
@@ -1498,6 +1536,7 @@ function Resolve-ActionFailureStatus([string]$message) {
         $message -like "stale_screenshot*" -or
         $message -like "invalid_window_ref*" -or
         $message -like "foreground_not_acquired*" -or
+        $message -like "modal_window_required*" -or
         $message -like "focus_not_acquired*" -or
         $message -like "focused_element_not_in_target*" -or
         $message -like "focused_element_unknown*" -or
@@ -1516,6 +1555,69 @@ function Resolve-ActionFailureStatus([string]$message) {
     return "unknown"
 }
 
+function Find-SnapshotElement($snapshot, $targetRecord) {
+    if ($null -eq $snapshot -or $null -eq $targetRecord) { return $null }
+    foreach ($record in @($snapshot.elements)) {
+        if (Same-RuntimeId @($record.runtimeId) @($targetRecord.runtimeId)) {
+            return $record
+        }
+    }
+    return $null
+}
+
+function Test-ExpectedPostcondition($expected, $operation, $snapshot, [IntPtr]$hwnd) {
+    if ($null -eq $expected) { return $null }
+    $type = ([string]$expected.type).Trim().ToLowerInvariant()
+    $satisfied = $false
+    $detail = ""
+    switch ($type) {
+        "target_focused" {
+            if ($null -eq $operation.element -or $null -eq $snapshot.focusedElement) {
+                $detail = "target or focused element unavailable"
+            } else {
+                $satisfied = Same-RuntimeId @($snapshot.focusedElement.runtimeId) @($operation.element.runtimeId)
+                $detail = if ($satisfied) { "target element has keyboard focus" } else { "focused element identity differs from target" }
+            }
+        }
+        "target_value_equals" {
+            $record = Find-SnapshotElement $snapshot $operation.element
+            if ($null -eq $record) {
+                $detail = "target element unavailable after action"
+            } else {
+                $actual = [string]$record.value
+                $expectedValue = [string]$expected.value
+                $satisfied = $actual -ceq $expectedValue
+                $detail = if ($satisfied) { "target value matched" } else { "target value mismatch" }
+            }
+        }
+        "text_contains" {
+            $needle = [string]$expected.text
+            $haystack = (@($snapshot.treeLines) + @([string]$snapshot.documentText, [string]$snapshot.selectedText, [string]$snapshot.focusedSummary)) -join "`n"
+            $satisfied = $haystack.IndexOf($needle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            $detail = if ($satisfied) { "snapshot contains expected text" } else { "expected text not found in refreshed snapshot" }
+        }
+        "foreground_window" {
+            $actual = [OCUWin32]::GetForegroundWindow()
+            $satisfied = $actual -eq $hwnd
+            $detail = if ($satisfied) { "target window is foreground" } else { "foreground hwnd=$($actual.ToInt64()) target=$($hwnd.ToInt64())" }
+        }
+        "screenshot_changed" {
+            $before = [string](Get-OperationPropertyValue $operation "before_screenshot_sha256")
+            $after = [string]$snapshot.screenshotSha256
+            $satisfied = -not [string]::IsNullOrWhiteSpace($before) -and -not [string]::IsNullOrWhiteSpace($after) -and $before -ne $after
+            $detail = if ($satisfied) { "screenshot content changed" } else { "screenshot content did not change or could not be compared" }
+        }
+        default {
+            $detail = "unsupported postcondition type"
+        }
+    }
+    return [pscustomobject]@{
+        type = $type
+        satisfied = [bool]$satisfied
+        detail = $detail
+    }
+}
+
 function List-Apps {
     $lines = New-Object System.Collections.Generic.List[string]
     foreach ($process in (Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | Sort-Object ProcessName, Id)) {
@@ -1529,7 +1631,7 @@ function List-Apps {
 }
 
 function Same-RuntimeId($left, $right) {
-    if ($null -eq $left -or $null -eq $right -or $left.Count -ne $right.Count) {
+    if ($null -eq $left -or $null -eq $right -or $left.Count -eq 0 -or $left.Count -ne $right.Count) {
         return $false
     }
     for ($i = 0; $i -lt $left.Count; $i++) {
@@ -2013,8 +2115,13 @@ try {
 
         Start-Sleep -Milliseconds 120
         $snapshot = Build-Snapshot "" (Resolve-TextLimit $operation.text_limit) ([int]$operation.max_tree_nodes) ([int]$operation.max_tree_depth) $window
-        $snapshot | Add-Member -NotePropertyName actionStatus -NotePropertyValue "applied" -Force
-        $response = [pscustomobject]@{ ok = $true; status = "applied"; snapshot = $snapshot }
+        $postcondition = Test-ExpectedPostcondition (Get-OperationPropertyValue $operation "expected_postcondition") $operation $snapshot $hwnd
+        $status = if ($null -ne $postcondition -and -not $postcondition.satisfied) { "unknown" } else { "applied" }
+        if ($null -ne $postcondition) {
+            $snapshot | Add-Member -NotePropertyName postcondition -NotePropertyValue $postcondition -Force
+        }
+        $snapshot | Add-Member -NotePropertyName actionStatus -NotePropertyValue $status -Force
+        $response = [pscustomobject]@{ ok = $true; status = $status; snapshot = $snapshot }
     }
 } catch {
     $message = $_.Exception.Message

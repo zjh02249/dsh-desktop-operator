@@ -21,7 +21,7 @@ pnpm build:runtime
 pnpm package:plugin
 ```
 
-`build:runtime` runs the vendored Go tests and `go vet`, cross-compiles both Windows architectures, and writes SHA-256 metadata. `package:plugin` then runs plugin tests, creates the single `.tgz`, and fails if either binary, the source, or licensing files are missing from the archive.
+`build:runtime` runs the vendored Go tests and `go vet`, cross-compiles both Windows architectures, and writes SHA-256 metadata. `package:plugin` then runs plugin tests, creates the single `.tgz`, and fails if either binary, the source, smoke fixtures, or licensing files are missing from the archive.
 
 ## Upstream sync policy
 
@@ -30,7 +30,7 @@ pnpm package:plugin
 1. review the upstream diff and license changes;
 2. port only the required runtime changes into this directory;
 3. update `upstream.json` to the reviewed commit;
-4. run `pnpm package:plugin` and the two smoke scripts;
+4. run `pnpm package:plugin` plus the window, action/postcondition, modal, and capture smoke scripts;
 5. record behavior changes in `ROADMAP.md`.
 
 Do not make the installed plugin depend on an adjacent checkout or an absolute local path.

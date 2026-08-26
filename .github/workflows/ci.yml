@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --prod --frozen-lockfile
+      - name: Verify committed package artifacts
+        run: node -e "const fs=require('node:fs'); for (const f of ['lib/index.js','lib/index.d.ts','lib/invariant.js','lib/invariant.d.ts','cordis.patch.yml']) fs.accessSync(f)"
+      - run: pnpm pack --out /tmp/dsh-plugin-computer-use.tgz

@@ -1,0 +1,4 @@
+# Optional Profile Bundle: install the package-local Computer Use runtime.
+# The model-facing row belongs in an authored Agent Preset. One live Session
+# owns the instance's MCP process and accessibility-element snapshot namespace.
+[]

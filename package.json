@@ -1,7 +1,7 @@
 {
   "name": "@valkia/dsh-plugin-computer-use",
   "description": "Opt-in DeepSeek Harness desktop Computer Use tools over Open Computer Use MCP",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -61,7 +61,8 @@
     "@deepseek-ai/dsh-subprocess": ">=0.0.1-rc.1 <1",
     "@deepseek-ai/dsh-system-prompt": ">=0.0.1-rc.1 <1",
     "@deepseek-ai/dsh-tools": ">=0.0.1-rc.1 <1",
-    "@deepseek-ai/dsh-user-approval": ">=0.0.1-rc.1 <1"
+    "@deepseek-ai/dsh-user-approval": ">=0.0.1-rc.1 <1",
+    "@deepseek-ai/dsh-user-questions": ">=0.0.1-rc.1 <1"
   },
   "dependencies": {
     "@deepseek-ai/dsh-mcp-client": "^0.0.1-rc.1",

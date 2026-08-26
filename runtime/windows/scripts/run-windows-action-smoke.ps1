@@ -211,12 +211,19 @@ try {
         observation_id = $initial.ObservationID
         element_index = $inputElement.Index
         value = "alpha"
-        expected_postcondition = @{ type = "target_value_equals"; value = "alpha" }
+        action_intent = @{ kind = "edit"; summary = "Set the fixture input to alpha" }
+        expected_postcondition = @{
+            type = "all"
+            conditions = @(
+                @{ type = "target_value_equals"; value = "alpha" },
+                @{ type = "text_contains"; text = "alpha" }
+            )
+        }
     }
     Assert-ToolSuccess $setValue "set_value"
     $afterSet = Get-SnapshotTokens $setValue
     if ($afterSet.Text -notmatch "alpha") { throw "set_value post-action snapshot did not contain alpha" }
-    if ($afterSet.Text -notmatch "ActionStatus: applied" -or $afterSet.Text -notmatch "Postcondition: type=target_value_equals satisfied=true") {
+    if ($afterSet.Text -notmatch "ActionStatus: applied" -or $afterSet.Text -notmatch "Postcondition: type=all satisfied=true") {
         throw "Satisfied set_value postcondition was not reported as applied"
     }
 
@@ -226,11 +233,18 @@ try {
         observation_id = $afterSet.ObservationID
         element_index = $inputElement.Index
         value = "alpha"
-        expected_postcondition = @{ type = "target_value_equals"; value = "beta" }
+        action_intent = @{ kind = "edit"; summary = "Keep the fixture input at alpha" }
+        expected_postcondition = @{
+            type = "all"
+            conditions = @(
+                @{ type = "target_value_equals"; value = "beta" },
+                @{ type = "text_contains"; text = "alpha" }
+            )
+        }
     }
     Assert-ToolSuccess $unknownPostcondition "set_value with unmet postcondition"
     $afterSet = Get-SnapshotTokens $unknownPostcondition
-    if ($afterSet.Text -notmatch "ActionStatus: unknown" -or $afterSet.Text -notmatch "Postcondition: type=target_value_equals satisfied=false") {
+    if ($afterSet.Text -notmatch "ActionStatus: unknown" -or $afterSet.Text -notmatch "Postcondition: type=all satisfied=false") {
         throw "Unmet set_value postcondition did not downgrade the result to unknown"
     }
 
@@ -239,6 +253,7 @@ try {
         screenshot_id = $initial.ScreenshotID
         x = 30
         y = 30
+        action_intent = @{ kind = "navigate"; summary = "Exercise stale screenshot rejection" }
     }
     if (-not $staleCoordinate.isError -or $staleCoordinate.content[0].text -notmatch "screenshot_id does not match") {
         throw "A stale screenshot_id was not rejected before coordinate input"
@@ -260,6 +275,7 @@ try {
         x = $buttonElement.X + [int]($buttonElement.Width / 2)
         y = $buttonElement.Y + [int]($buttonElement.Height / 2)
         click_method = "app_post"
+        action_intent = @{ kind = "select"; summary = "Click the fixture apply button after moving the window" }
         expected_postcondition = @{ type = "text_contains"; text = "clicked:alpha" }
     }
     if (-not $movedCoordinate.isError -or $movedCoordinate.content[0].text -notmatch "stale_screenshot\(window_bounds_changed") {
@@ -277,6 +293,7 @@ try {
         x = $buttonElement.X + [int]($buttonElement.Width / 2)
         y = $buttonElement.Y + [int]($buttonElement.Height / 2)
         click_method = "app_post"
+        action_intent = @{ kind = "select"; summary = "Click the fixture apply button" }
     }
     Assert-ToolSuccess $coordinateClick "coordinate click"
     $afterCoordinateClick = Get-SnapshotTokens $coordinateClick
@@ -291,6 +308,7 @@ try {
         observation_id = $afterCoordinateClick.ObservationID
         element_index = $inputElement.Index
         action = "SetFocus"
+        action_intent = @{ kind = "select"; summary = "Focus the fixture input" }
         expected_postcondition = @{ type = "target_focused" }
     }
     Assert-ToolSuccess $focusInput "focus input"
@@ -304,6 +322,7 @@ try {
         window = $window
         observation_id = $afterFocus.ObservationID
         text = "Z9"
+        action_intent = @{ kind = "edit"; summary = "Type Z9 into the fixture input" }
     }
     Assert-ToolSuccess $typed "type_text"
     $afterType = Get-SnapshotTokens $typed
@@ -317,6 +336,7 @@ try {
         window = $window
         observation_id = $afterType.ObservationID
         key = "Return"
+        action_intent = @{ kind = "submit"; summary = "Submit the fixture form with Return" }
     }
     Assert-ToolSuccess $pressed "press_key"
     $afterPress = Get-SnapshotTokens $pressed

@@ -129,7 +129,7 @@ ActionResult
 
 ## 5. 分阶段实施路线
 
-### 当前进度（2026-08-26）
+### 当前进度（2026-08-27）
 
 - 已把 Windows runtime 源码、测试、smoke、上游许可证和第三方 notices 正式并入 `runtime/`；独立 runtime checkout 降级为临时上游同步区。
 - 已在 Windows runtime 增加 `WindowRef`、`list_windows`、`get_window`、`launch_app`、`activate_window`、`get_window_state`，保留原有 9 个 tools 与 `get_app_state` 兼容入口。
@@ -146,8 +146,9 @@ ActionResult
 - 已声明并验证 Per-Monitor-V2 DPI awareness，快照分别返回显示器有效 DPI、窗口 DPI、物理坐标空间和虚拟桌面边界；视觉坐标按截图／窗口比例映射，越界坐标和窗口移动后的旧截图会在输入前拒绝。
 - 已让最小化窗口返回显式不可捕获状态，并验证 `activate_window → fresh get_window_state` 能恢复 WGC 捕获；当前 200% DPI 实机 smoke 通过。
 - 已实现模态恢复安全边界：快照返回 `ModalWindows`，已被模态窗口禁用的 owner 会以 `modal_window_required` 拒绝激活并返回精确候选；WinForms owner/modal 实机 smoke 已通过。
-- 已实现首版 `expected_postcondition`：支持焦点、值、文本、前台窗口和截图变化验证；不满足时返回 `ActionStatus: unknown`，并已在 WPF 实机 smoke 中覆盖 satisfied/unknown 两条路径。
-- 下一切片：完整多屏／负坐标／其他 DPI 机器矩阵、动作风险分类确认、组合／窗口关闭后置条件、真实应用矩阵与正式打包签名。
+- 已把 `expected_postcondition` 扩展为焦点、值、文本、前台窗口、截图变化和 `window_closed`，并支持最多 8 个叶子条件的 `all`/`any` 组合；WPF satisfied/unknown 与 WinForms modal close 实机 smoke 均通过。
+- 已完成 M6 的高风险最终动作门禁：七个 mutating tools 强制声明 `action_intent`，DSH adapter 对发送、提交、发布、删除、购买、批准、上传、权限、敏感数据暴露和安装执行逐次确认／拒绝／显式允许策略；运行时对明显高风险控件增加低风险意图防绕过检查。
+- 下一切片：完整多屏／负坐标／其他 DPI 机器矩阵、真实应用安全矩阵、窗口级取消与动作锁、正式打包签名。
 
 ### M0：基线、工具链与回归夹具
 

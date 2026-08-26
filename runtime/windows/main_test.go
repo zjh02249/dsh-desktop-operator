@@ -44,16 +44,24 @@ func TestWindowToolSchemas(t *testing.T) {
 	}
 
 	for _, name := range []string{"click", "drag", "perform_secondary_action", "press_key", "scroll", "set_value", "type_text"} {
-		properties := findToolDefinition(t, name).InputSchema["properties"].(map[string]any)
+		tool := findToolDefinition(t, name)
+		properties := tool.InputSchema["properties"].(map[string]any)
 		if _, ok := properties["window"]; !ok {
 			t.Fatalf("%s should expose window", name)
+		}
+		actionIntent, ok := properties["action_intent"].(map[string]any)
+		if !ok || actionIntent["type"] != "object" {
+			t.Fatalf("%s should require the action_intent object", name)
+		}
+		if !containsString(tool.InputSchema["required"].([]string), "action_intent") {
+			t.Fatalf("%s should require action_intent", name)
 		}
 		postcondition, ok := properties["expected_postcondition"].(map[string]any)
 		if !ok || postcondition["type"] != "object" {
 			t.Fatalf("%s should expose the expected_postcondition object", name)
 		}
 		postconditionType := postcondition["properties"].(map[string]any)["type"].(map[string]any)
-		if got := strings.Join(postconditionType["enum"].([]string), ","); got != "target_focused,target_value_equals,text_contains,foreground_window,screenshot_changed" {
+		if got := strings.Join(postconditionType["enum"].([]string), ","); got != "target_focused,target_value_equals,text_contains,foreground_window,screenshot_changed,window_closed,all,any" {
 			t.Fatalf("%s expected_postcondition enum = %q", name, got)
 		}
 	}
@@ -106,15 +114,62 @@ func TestRequiredActionTarget(t *testing.T) {
 		},
 		"observation_id": "obs-1",
 		"screenshot_id":  "shot-1",
+		"action_intent": map[string]any{
+			"kind":    "edit",
+			"summary": "Fill the note",
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Window == nil || target.Window.HWND != "1234" || target.ObservationID != "obs-1" || target.ScreenshotID != "shot-1" {
+	if target.Window == nil || target.Window.HWND != "1234" || target.ObservationID != "obs-1" || target.ScreenshotID != "shot-1" || target.ActionIntent.Kind != "edit" {
 		t.Fatalf("requiredActionTarget() = %#v", target)
 	}
 	if _, err := requiredActionTarget(map[string]any{}); err == nil || err.Error() != "One of app or window is required" {
 		t.Fatalf("missing action target error = %v", err)
+	}
+	if _, err := requiredActionTarget(map[string]any{"app": "notepad"}); err == nil || err.Error() != "Missing required argument: action_intent" {
+		t.Fatalf("missing action_intent error = %v", err)
+	}
+}
+
+func TestActionIntentParserAndElementRiskMismatch(t *testing.T) {
+	intent, err := requiredActionIntent(map[string]any{
+		"action_intent": map[string]any{"kind": " SEND ", "summary": "Send the prepared message"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.Kind != "send" || intent.Summary != "Send the prepared message" {
+		t.Fatalf("requiredActionIntent() = %#v", intent)
+	}
+
+	for _, input := range []map[string]any{
+		{},
+		{"action_intent": "send"},
+		{"action_intent": map[string]any{"kind": "unknown", "summary": "Do it"}},
+		{"action_intent": map[string]any{"kind": "edit", "summary": "  "}},
+	} {
+		if _, err := requiredActionIntent(input); err == nil {
+			t.Fatalf("requiredActionIntent(%#v) unexpectedly succeeded", input)
+		}
+	}
+
+	sendButton := &elementRecord{
+		Index:                9,
+		Name:                 "发送",
+		LocalizedControlType: "按钮",
+		Actions:              []string{"Press"},
+	}
+	if err := validateElementActionIntent(sendButton, actionIntent{Kind: "navigate", Summary: "Open the next screen"}); err == nil || !strings.Contains(err.Error(), "risk_intent_mismatch") {
+		t.Fatalf("send button mismatch = %v", err)
+	}
+	if err := validateElementActionIntent(sendButton, actionIntent{Kind: "send", Summary: "Send the message"}); err != nil {
+		t.Fatalf("high-risk intent should match send button: %v", err)
+	}
+	edit := &elementRecord{Index: 10, Name: "Send message", LocalizedControlType: "edit", Actions: []string{"SetFocus"}}
+	if err := validateElementActionIntent(edit, actionIntent{Kind: "edit", Summary: "Edit the message"}); err != nil {
+		t.Fatalf("editable control should not be treated as a final send action: %v", err)
 	}
 }
 
@@ -129,6 +184,22 @@ func TestExpectedPostconditionParser(t *testing.T) {
 		t.Fatalf("postcondition = %#v", condition)
 	}
 
+	condition, err = optionalExpectedPostcondition(map[string]any{
+		"expected_postcondition": map[string]any{
+			"type": "all",
+			"conditions": []any{
+				map[string]any{"type": "window_closed"},
+				map[string]any{"type": "text_contains", "text": "saved"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if condition.Type != "all" || len(condition.Conditions) != 2 || condition.Conditions[0].Type != "window_closed" {
+		t.Fatalf("composite postcondition = %#v", condition)
+	}
+
 	for _, input := range []map[string]any{
 		{"expected_postcondition": "text_contains"},
 		{"expected_postcondition": map[string]any{"type": "not_supported"}},
@@ -136,6 +207,18 @@ func TestExpectedPostconditionParser(t *testing.T) {
 		{"expected_postcondition": map[string]any{"type": "target_value_equals", "value": 42}},
 		{"expected_postcondition": map[string]any{"type": "text_contains", "text": "  "}},
 		{"expected_postcondition": map[string]any{"type": "text_contains", "text": 42}},
+		{"expected_postcondition": map[string]any{"type": "all", "conditions": []any{}}},
+		{
+			"expected_postcondition": map[string]any{
+				"type": "any",
+				"conditions": []any{
+					map[string]any{
+						"type":       "all",
+						"conditions": []any{map[string]any{"type": "window_closed"}},
+					},
+				},
+			},
+		},
 	} {
 		if _, err := optionalExpectedPostcondition(input); err == nil {
 			t.Fatalf("optionalExpectedPostcondition(%#v) unexpectedly succeeded", input)
@@ -934,4 +1017,13 @@ func findToolDefinition(t *testing.T, name string) toolDefinition {
 
 func floatPtr(value float64) *float64 {
 	return &value
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }

@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var version = "0.7.0"
+var version = "0.8.0"
 
 var clickMethodValues = []string{"auto", "accessibility", "app_post", "sky_click", "global"}
 
@@ -99,15 +99,22 @@ type captureDescriptor struct {
 }
 
 type expectedPostcondition struct {
-	Type  string `json:"type"`
-	Value string `json:"value,omitempty"`
-	Text  string `json:"text,omitempty"`
+	Type       string                  `json:"type"`
+	Value      string                  `json:"value,omitempty"`
+	Text       string                  `json:"text,omitempty"`
+	Conditions []expectedPostcondition `json:"conditions,omitempty"`
 }
 
 type postconditionResult struct {
-	Type      string `json:"type"`
-	Satisfied bool   `json:"satisfied"`
-	Detail    string `json:"detail,omitempty"`
+	Type       string                `json:"type"`
+	Satisfied  bool                  `json:"satisfied"`
+	Detail     string                `json:"detail,omitempty"`
+	Conditions []postconditionResult `json:"conditions,omitempty"`
+}
+
+type actionIntent struct {
+	Kind    string `json:"kind"`
+	Summary string `json:"summary"`
 }
 
 func (f frame) renderedLocalFrame() string {
@@ -141,6 +148,7 @@ type appSnapshot struct {
 	ScreenshotID        string               `json:"screenshotId,omitempty"`
 	ActionStatus        string               `json:"actionStatus,omitempty"`
 	Postcondition       *postconditionResult `json:"postcondition,omitempty"`
+	WindowClosed        bool                 `json:"windowClosed,omitempty"`
 	WindowTitle         string               `json:"windowTitle,omitempty"`
 	WindowBounds        *frame               `json:"windowBounds,omitempty"`
 	ModalWindows        []windowRef          `json:"modalWindows,omitempty"`
@@ -186,6 +194,9 @@ func (s *appSnapshot) renderedText() string {
 	if s.ActionStatus != "" {
 		lines = append(lines, fmt.Sprintf("ActionStatus: %s", s.ActionStatus))
 	}
+	if s.WindowClosed {
+		lines = append(lines, "WindowClosed: true")
+	}
 	if s.Postcondition != nil {
 		lines = append(lines, fmt.Sprintf(
 			"Postcondition: type=%s satisfied=%t detail=%s",
@@ -193,6 +204,10 @@ func (s *appSnapshot) renderedText() string {
 			s.Postcondition.Satisfied,
 			strconv.Quote(s.Postcondition.Detail),
 		))
+		if len(s.Postcondition.Conditions) > 0 {
+			conditionsJSON, _ := json.Marshal(s.Postcondition.Conditions)
+			lines = append(lines, fmt.Sprintf("PostconditionResults: %s", conditionsJSON))
+		}
 	}
 	if len(s.ModalWindows) > 0 {
 		modalJSON, _ := json.Marshal(s.ModalWindows)
@@ -330,6 +345,7 @@ type actionTarget struct {
 	Window                *windowRef
 	ObservationID         string
 	ScreenshotID          string
+	ActionIntent          actionIntent
 	ExpectedPostcondition *expectedPostcondition
 }
 
@@ -658,6 +674,9 @@ func (s *service) click(target actionTarget, elementIndex string, x, y *float64,
 		if err != nil {
 			return textResult(err.Error(), true)
 		}
+		if err := validateElementActionIntent(record, target.ActionIntent); err != nil {
+			return textResult(err.Error(), true)
+		}
 		request.Element = record
 	}
 	return s.actionResult(resolved.cacheKey, request)
@@ -676,6 +695,9 @@ func (s *service) performSecondaryAction(target actionTarget, elementIndex, acti
 	}
 	record, err := lookupElement(resolved.snapshot, elementIndex)
 	if err != nil {
+		return textResult(err.Error(), true)
+	}
+	if err := validateElementActionIntent(record, target.ActionIntent); err != nil {
 		return textResult(err.Error(), true)
 	}
 	return s.actionResult(resolved.cacheKey, psRequest{
@@ -817,12 +839,10 @@ func (s *service) actionResult(cacheKey string, request psRequest) toolCallResul
 		if before == nil {
 			return textResult("expected_postcondition requires a current snapshot", true)
 		}
-		switch condition.Type {
-		case "target_focused", "target_value_equals":
-			if request.Element == nil {
-				return textResult("expected_postcondition "+condition.Type+" requires an element-targeted action", true)
-			}
-		case "screenshot_changed":
+		if requiredType, ok := postconditionElementRequirement(*condition); ok && request.Element == nil {
+			return textResult("expected_postcondition "+requiredType+" requires an element-targeted action", true)
+		}
+		if postconditionRequiresScreenshot(*condition) {
 			if strings.TrimSpace(before.ScreenshotSHA256) == "" {
 				return textResult("expected_postcondition screenshot_changed requires a captured screenshot", true)
 			}
@@ -834,6 +854,32 @@ func (s *service) actionResult(cacheKey string, request psRequest) toolCallResul
 		return result
 	}
 	return snapshot.result()
+}
+
+func postconditionElementRequirement(condition expectedPostcondition) (string, bool) {
+	switch condition.Type {
+	case "target_focused", "target_value_equals":
+		return condition.Type, true
+	case "all", "any":
+		for _, child := range condition.Conditions {
+			if requiredType, ok := postconditionElementRequirement(child); ok {
+				return requiredType, true
+			}
+		}
+	}
+	return "", false
+}
+
+func postconditionRequiresScreenshot(condition expectedPostcondition) bool {
+	if condition.Type == "screenshot_changed" {
+		return true
+	}
+	for _, child := range condition.Conditions {
+		if postconditionRequiresScreenshot(child) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *service) currentSnapshot(app string) *appSnapshot {
@@ -1133,6 +1179,48 @@ func lookupElement(snapshot *appSnapshot, elementIndex string) (*elementRecord, 
 	return nil, fmt.Errorf("unknown element_index %q", elementIndex)
 }
 
+func validateElementActionIntent(element *elementRecord, intent actionIntent) error {
+	if element == nil || isHighRiskActionIntent(intent.Kind) || !isActionControl(element) {
+		return nil
+	}
+	label := strings.ToLower(strings.TrimSpace(strings.Join([]string{element.Name, element.AutomationID}, " ")))
+	for riskKind, keywords := range map[string][]string{
+		"send":                  {"send", "发送", "寄送", "传送"},
+		"submit":                {"submit", "提交", "确认提交"},
+		"publish":               {"publish", "发布", "公开"},
+		"delete":                {"delete", "remove", "删除", "移除"},
+		"purchase":              {"buy", "purchase", "pay", "checkout", "购买", "支付", "付款", "结算"},
+		"approve":               {"approve", "authorize", "批准", "同意", "授权"},
+		"upload":                {"upload", "上传"},
+		"change_access":         {"share", "permission", "access", "共享", "权限", "访问"},
+		"expose_sensitive_data": {"reveal", "show password", "显示密码", "公开敏感"},
+		"install":               {"install", "安装"},
+	} {
+		for _, keyword := range keywords {
+			if strings.Contains(label, keyword) {
+				return fmt.Errorf("risk_intent_mismatch: element %d appears to perform %s, but action_intent.kind is %s", element.Index, riskKind, intent.Kind)
+			}
+		}
+	}
+	return nil
+}
+
+func isActionControl(element *elementRecord) bool {
+	controlType := strings.ToLower(strings.TrimSpace(element.ControlType + " " + element.LocalizedControlType))
+	for _, marker := range []string{"button", "menuitem", "menu item", "hyperlink", "按钮", "菜单项", "链接"} {
+		if strings.Contains(controlType, marker) {
+			return true
+		}
+	}
+	for _, action := range element.Actions {
+		switch strings.ToLower(strings.TrimSpace(action)) {
+		case "press", "showmenu", "confirm":
+			return true
+		}
+	}
+	return false
+}
+
 func runPowerShell(request psRequest) (*psResponse, error) {
 	if runtime.GOOS != "windows" {
 		return nil, errors.New("Windows Computer Use runtime requires powershell.exe on Windows")
@@ -1262,6 +1350,10 @@ func requiredActionTarget(args map[string]any) (actionTarget, error) {
 	if window == nil && app == "" {
 		return actionTarget{}, errors.New("One of app or window is required")
 	}
+	intent, err := requiredActionIntent(args)
+	if err != nil {
+		return actionTarget{}, err
+	}
 	expectedPostcondition, err := optionalExpectedPostcondition(args)
 	if err != nil {
 		return actionTarget{}, err
@@ -1271,8 +1363,58 @@ func requiredActionTarget(args map[string]any) (actionTarget, error) {
 		Window:                window,
 		ObservationID:         requiredString(args, "observation_id"),
 		ScreenshotID:          requiredString(args, "screenshot_id"),
+		ActionIntent:          intent,
 		ExpectedPostcondition: expectedPostcondition,
 	}, nil
+}
+
+func requiredActionIntent(args map[string]any) (actionIntent, error) {
+	raw, exists := args["action_intent"]
+	if !exists || raw == nil {
+		return actionIntent{}, errors.New("Missing required argument: action_intent")
+	}
+	value, ok := raw.(map[string]any)
+	if !ok {
+		return actionIntent{}, errors.New("action_intent must be an object")
+	}
+	kind, kindOK := value["kind"].(string)
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if !kindOK || kind == "" {
+		return actionIntent{}, errors.New("action_intent.kind must be a supported non-empty string")
+	}
+	if !isActionIntentKind(kind) {
+		return actionIntent{}, fmt.Errorf("unsupported action_intent kind %q", kind)
+	}
+	summary, summaryOK := value["summary"].(string)
+	summary = strings.TrimSpace(summary)
+	if !summaryOK || summary == "" {
+		return actionIntent{}, errors.New("action_intent.summary must be a non-empty string")
+	}
+	if len([]rune(summary)) > 500 {
+		return actionIntent{}, errors.New("action_intent.summary must be at most 500 characters")
+	}
+	return actionIntent{Kind: kind, Summary: summary}, nil
+}
+
+func isActionIntentKind(kind string) bool {
+	switch kind {
+	case "navigate", "edit", "select", "move", "dismiss",
+		"send", "submit", "publish", "delete", "purchase", "approve", "upload",
+		"change_access", "expose_sensitive_data", "install":
+		return true
+	default:
+		return false
+	}
+}
+
+func isHighRiskActionIntent(kind string) bool {
+	switch kind {
+	case "send", "submit", "publish", "delete", "purchase", "approve", "upload",
+		"change_access", "expose_sensitive_data", "install":
+		return true
+	default:
+		return false
+	}
 }
 
 func optionalExpectedPostcondition(args map[string]any) (*expectedPostcondition, error) {
@@ -1284,32 +1426,64 @@ func optionalExpectedPostcondition(args map[string]any) (*expectedPostcondition,
 	if !ok {
 		return nil, errors.New("expected_postcondition must be an object")
 	}
+	condition, err := parseExpectedPostcondition(value, true)
+	if err != nil {
+		return nil, err
+	}
+	return &condition, nil
+}
+
+func parseExpectedPostcondition(value map[string]any, allowComposite bool) (expectedPostcondition, error) {
 	typeName, _ := value["type"].(string)
 	typeName = strings.ToLower(strings.TrimSpace(typeName))
-	condition := &expectedPostcondition{Type: typeName}
+	condition := expectedPostcondition{Type: typeName}
 	condition.Value, _ = value["value"].(string)
 	condition.Text, _ = value["text"].(string)
 	switch typeName {
-	case "target_focused", "foreground_window", "screenshot_changed":
+	case "target_focused", "foreground_window", "screenshot_changed", "window_closed":
 		return condition, nil
 	case "target_value_equals":
 		if _, ok := value["value"]; !ok {
-			return nil, errors.New("expected_postcondition target_value_equals requires value")
+			return expectedPostcondition{}, errors.New("expected_postcondition target_value_equals requires value")
 		}
 		if _, ok := value["value"].(string); !ok {
-			return nil, errors.New("expected_postcondition target_value_equals value must be a string")
+			return expectedPostcondition{}, errors.New("expected_postcondition target_value_equals value must be a string")
 		}
 		return condition, nil
 	case "text_contains":
 		if _, ok := value["text"].(string); !ok {
-			return nil, errors.New("expected_postcondition text_contains text must be a string")
+			return expectedPostcondition{}, errors.New("expected_postcondition text_contains text must be a string")
 		}
 		if strings.TrimSpace(condition.Text) == "" {
-			return nil, errors.New("expected_postcondition text_contains requires non-empty text")
+			return expectedPostcondition{}, errors.New("expected_postcondition text_contains requires non-empty text")
+		}
+		return condition, nil
+	case "all", "any":
+		if !allowComposite {
+			return expectedPostcondition{}, errors.New("expected_postcondition composites cannot be nested")
+		}
+		rawConditions, ok := value["conditions"].([]any)
+		if !ok || len(rawConditions) == 0 {
+			return expectedPostcondition{}, fmt.Errorf("expected_postcondition %s requires 1 to 8 conditions", typeName)
+		}
+		if len(rawConditions) > 8 {
+			return expectedPostcondition{}, fmt.Errorf("expected_postcondition %s requires 1 to 8 conditions", typeName)
+		}
+		condition.Conditions = make([]expectedPostcondition, 0, len(rawConditions))
+		for _, rawChild := range rawConditions {
+			childValue, ok := rawChild.(map[string]any)
+			if !ok {
+				return expectedPostcondition{}, errors.New("expected_postcondition conditions must contain objects")
+			}
+			child, err := parseExpectedPostcondition(childValue, false)
+			if err != nil {
+				return expectedPostcondition{}, err
+			}
+			condition.Conditions = append(condition.Conditions, child)
 		}
 		return condition, nil
 	default:
-		return nil, fmt.Errorf("unsupported expected_postcondition type %q", typeName)
+		return expectedPostcondition{}, fmt.Errorf("unsupported expected_postcondition type %q", typeName)
 	}
 }
 
@@ -1498,8 +1672,9 @@ func toolDefinitions() []toolDefinition {
 				"click_count":            integerProperty("Number of clicks. Defaults to 1"),
 				"mouse_button":           enumStringProperty("Mouse button to click. Defaults to left.", []string{"left", "right", "middle"}),
 				"click_method":           enumStringProperty("Click implementation: auto (default), accessibility, app_post, sky_click, or global. Accessibility requires element_index. Windows supports app_post through HWND messages and does not currently support sky_click or global.", clickMethodValues),
+				"action_intent":          actionIntentProperty(),
 				"expected_postcondition": postconditionProperty(),
-			}, nil),
+			}, []string{"action_intent"}),
 		},
 		{
 			Name:        "drag",
@@ -1513,8 +1688,9 @@ func toolDefinitions() []toolDefinition {
 				"from_y":                 numberProperty("Start Y coordinate"),
 				"to_x":                   numberProperty("End X coordinate"),
 				"to_y":                   numberProperty("End Y coordinate"),
+				"action_intent":          actionIntentProperty(),
 				"expected_postcondition": postconditionProperty(),
-			}, []string{"from_x", "from_y", "to_x", "to_y"}),
+			}, []string{"from_x", "from_y", "to_x", "to_y", "action_intent"}),
 		},
 		{
 			Name:        "get_window",
@@ -1579,8 +1755,9 @@ func toolDefinitions() []toolDefinition {
 				"element_index":          stringProperty("Element identifier"),
 				"observation_id":         stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
 				"action":                 stringProperty("Secondary accessibility action name"),
+				"action_intent":          actionIntentProperty(),
 				"expected_postcondition": postconditionProperty(),
-			}, []string{"element_index", "action"}),
+			}, []string{"element_index", "action", "action_intent"}),
 		},
 		{
 			Name:        "press_key",
@@ -1591,8 +1768,9 @@ func toolDefinitions() []toolDefinition {
 				"window":                 windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
 				"observation_id":         stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
 				"key":                    stringProperty("Key or key-combination to press"),
+				"action_intent":          actionIntentProperty(),
 				"expected_postcondition": postconditionProperty(),
-			}, []string{"key"}),
+			}, []string{"key", "action_intent"}),
 		},
 		{
 			Name:        "scroll",
@@ -1605,8 +1783,9 @@ func toolDefinitions() []toolDefinition {
 				"element_index":          stringProperty("Element identifier"),
 				"observation_id":         stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
 				"pages":                  numberProperty("Number of pages to scroll. Fractional values are supported. Defaults to 1"),
+				"action_intent":          actionIntentProperty(),
 				"expected_postcondition": postconditionProperty(),
-			}, []string{"element_index", "direction"}),
+			}, []string{"element_index", "direction", "action_intent"}),
 		},
 		{
 			Name:        "set_value",
@@ -1618,8 +1797,9 @@ func toolDefinitions() []toolDefinition {
 				"element_index":          stringProperty("Element identifier"),
 				"observation_id":         stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
 				"value":                  stringProperty("Value to assign"),
+				"action_intent":          actionIntentProperty(),
 				"expected_postcondition": postconditionProperty(),
-			}, []string{"element_index", "value"}),
+			}, []string{"element_index", "value", "action_intent"}),
 		},
 		{
 			Name:        "type_text",
@@ -1630,8 +1810,9 @@ func toolDefinitions() []toolDefinition {
 				"window":                 windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
 				"observation_id":         stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
 				"text":                   stringProperty("Literal text to type"),
+				"action_intent":          actionIntentProperty(),
 				"expected_postcondition": postconditionProperty(),
-			}, []string{"text"}),
+			}, []string{"text", "action_intent"}),
 		},
 	}
 }
@@ -1709,12 +1890,55 @@ func textLimitProperty(description string) map[string]any {
 	}
 }
 
-func postconditionProperty() map[string]any {
+func actionIntentProperty() map[string]any {
 	return map[string]any{
 		"type":        "object",
-		"description": "Optional post-action check. An unsatisfied check returns ActionStatus unknown instead of claiming success.",
+		"description": "Required semantic declaration for the action. High-risk kinds are confirmed by the DSH host immediately before execution.",
 		"properties": map[string]any{
-			"type":  enumStringProperty("Postcondition kind.", []string{"target_focused", "target_value_equals", "text_contains", "foreground_window", "screenshot_changed"}),
+			"kind": enumStringProperty("Action kind. Use the actual final effect; never downgrade a high-risk action to bypass confirmation.", []string{
+				"navigate", "edit", "select", "move", "dismiss",
+				"send", "submit", "publish", "delete", "purchase", "approve", "upload",
+				"change_access", "expose_sensitive_data", "install",
+			}),
+			"summary": map[string]any{
+				"type":        "string",
+				"minLength":   1,
+				"maxLength":   500,
+				"description": "Concise user-readable description of what this one action will do.",
+			},
+		},
+		"required":             []string{"kind", "summary"},
+		"additionalProperties": false,
+	}
+}
+
+func postconditionProperty() map[string]any {
+	leaf := postconditionLeafProperty()
+	return map[string]any{
+		"type":        "object",
+		"description": "Optional post-action check. Use all/any to combine up to eight leaf checks. An unsatisfied check returns ActionStatus unknown instead of claiming success.",
+		"properties": map[string]any{
+			"type":  enumStringProperty("Postcondition kind.", []string{"target_focused", "target_value_equals", "text_contains", "foreground_window", "screenshot_changed", "window_closed", "all", "any"}),
+			"value": stringProperty("Exact target value required by target_value_equals."),
+			"text":  stringProperty("Case-insensitive text required by text_contains."),
+			"conditions": map[string]any{
+				"type":        "array",
+				"description": "One to eight non-nested leaf conditions for all/any.",
+				"minItems":    1,
+				"maxItems":    8,
+				"items":       leaf,
+			},
+		},
+		"required":             []string{"type"},
+		"additionalProperties": false,
+	}
+}
+
+func postconditionLeafProperty() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"type":  enumStringProperty("Leaf postcondition kind.", []string{"target_focused", "target_value_equals", "text_contains", "foreground_window", "screenshot_changed", "window_closed"}),
 			"value": stringProperty("Exact target value required by target_value_equals."),
 			"text":  stringProperty("Case-insensitive text required by text_contains."),
 		},

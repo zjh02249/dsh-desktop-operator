@@ -41,7 +41,7 @@ function loadAccessGateUnderTest() {
   const snippet = [
     'const COMPUTER_USE_TOOL_PREFIX = "mcp__computer_use__";',
     source.slice(functionStart, functionEnd),
-    'result = { installAccessGate };',
+    'result = { classifyComputerUseAction, installAccessGate };',
   ].join('\n')
 
   const context = { result: undefined }
@@ -57,7 +57,7 @@ const {
   COMPUTER_USE_PROMPT,
 } = loadExportsUnderTest()
 
-const { installAccessGate } = loadAccessGateUnderTest()
+const { classifyComputerUseAction, installAccessGate } = loadAccessGateUnderTest()
 
 function normalizeEnv(env) {
   return JSON.parse(JSON.stringify(env))
@@ -203,7 +203,7 @@ test('Computer Use ownership is released when the owning Agent turn stops', asyn
 
   assert.deepEqual(
     await preExecute(
-      { name: 'mcp__computer_use__click', callId: 'call-a', agent: firstAgent },
+      { name: 'mcp__computer_use__click', callId: 'call-a', agent: firstAgent, arguments: { action_intent: { kind: 'navigate', summary: 'Open the first window' } } },
       async () => continueDecision,
     ),
     continueDecision,
@@ -213,9 +213,113 @@ test('Computer Use ownership is released when the owning Agent turn stops', asyn
 
   assert.deepEqual(
     await preExecute(
-      { name: 'mcp__computer_use__click', callId: 'call-b', agent: secondAgent },
+      { name: 'mcp__computer_use__click', callId: 'call-b', agent: secondAgent, arguments: { action_intent: { kind: 'navigate', summary: 'Open the second window' } } },
       async () => continueDecision,
     ),
     continueDecision,
   )
+})
+
+test('Computer Use action risk classification fails closed without a declared intent', () => {
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(classifyComputerUseAction('mcp__computer_use__get_window_state', {}))),
+    { level: 'none' },
+  )
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(classifyComputerUseAction('mcp__computer_use__click', {}))),
+    { level: 'unclassified' },
+  )
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(classifyComputerUseAction('mcp__computer_use__click', {
+      action_intent: { kind: 'navigate', summary: 'Open settings' },
+    }))),
+    { level: 'low', kind: 'navigate', summary: 'Open settings' },
+  )
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(classifyComputerUseAction('mcp__computer_use__click', {
+      action_intent: { kind: 'send', summary: 'Send the prepared DingTalk message' },
+    }))),
+    { level: 'high', kind: 'send', summary: 'Send the prepared DingTalk message' },
+  )
+})
+
+test('high-risk Computer Use actions require an explicit UI confirmation under allow access', async () => {
+  const handlers = new Map()
+  const questions = []
+  const agent = { session: { id: 'session-a' } }
+  const ctx = {
+    on(event, handler) {
+      handlers.set(event, handler)
+    },
+    get(name) {
+      if (name !== 'userQuestions') return undefined
+      return {
+        async ask(request) {
+          questions.push(request)
+          return { answers: [{ id: 'confirm_computer_use_action', selected: ['确认执行'] }] }
+        },
+      }
+    },
+  }
+  installAccessGate(ctx, 'allow', 'confirm')
+  const preExecute = handlers.get('tools/pre-execute')
+  const continueDecision = { kind: 'continue' }
+
+  assert.deepEqual(
+    await preExecute({
+      name: 'mcp__computer_use__click',
+      callId: 'call-low',
+      agent,
+      arguments: { action_intent: { kind: 'navigate', summary: 'Open settings' } },
+    }, async () => continueDecision),
+    continueDecision,
+  )
+  assert.equal(questions.length, 0)
+
+  assert.deepEqual(
+    await preExecute({
+      name: 'mcp__computer_use__click',
+      callId: 'call-high',
+      agent,
+      arguments: { action_intent: { kind: 'send', summary: 'Send the prepared DingTalk message' } },
+    }, async () => continueDecision),
+    continueDecision,
+  )
+  assert.equal(questions.length, 1)
+  assert.match(questions[0].questions[0].detail, /Send the prepared DingTalk message/)
+  assert.deepEqual(JSON.parse(JSON.stringify(questions[0].questions[0].intent)), { kind: 'plan-review', approve: '确认执行' })
+})
+
+test('high-risk confirmation rejection and missing intent deny before execution', async () => {
+  const handlers = new Map()
+  const agent = { session: { id: 'session-a' } }
+  const ctx = {
+    on(event, handler) {
+      handlers.set(event, handler)
+    },
+    get(name) {
+      if (name !== 'userQuestions') return undefined
+      return {
+        async ask() {
+          return { answers: [{ id: 'confirm_computer_use_action', selected: ['取消'] }] }
+        },
+      }
+    },
+  }
+  installAccessGate(ctx, 'allow', 'confirm')
+  const preExecute = handlers.get('tools/pre-execute')
+  const next = async () => ({ kind: 'continue' })
+
+  const unclassified = await preExecute({ name: 'mcp__computer_use__press_key', callId: 'missing', agent, arguments: {} }, next)
+  assert.equal(unclassified.kind, 'deny')
+  assert.match(unclassified.reason, /action_intent/)
+
+  const rejected = await preExecute({
+    name: 'mcp__computer_use__click',
+    callId: 'rejected',
+    agent,
+    arguments: { action_intent: { kind: 'delete', summary: 'Delete the selected file' } },
+  }, next)
+  assert.equal(rejected.kind, 'deny')
+  assert.match(rejected.reason, /not confirmed/)
 })

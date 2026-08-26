@@ -20,6 +20,7 @@ import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-subprocess'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-user-approval'
+import type {} from '@deepseek-ai/dsh-user-questions'
 
 /** Cordis plugin name used by Loader diagnostics. */
 export const name = 'computer-use'
@@ -36,6 +37,20 @@ export const COMPUTER_USE_TOOL_PREFIX = `mcp__${COMPUTER_USE_SERVER_NAME}__`
 /** Access policy applied before any Computer Use MCP tool dispatches. */
 export type ComputerUseAccessPolicy = 'per-call' | 'allow'
 
+/** Policy for semantically high-risk desktop actions after ordinary desktop access is admitted. */
+export type ComputerUseHighRiskActionPolicy = 'confirm' | 'deny' | 'allow'
+
+/** Intent kinds accepted by every mutating Computer Use tool. */
+export type ComputerUseActionIntentKind =
+  | 'navigate' | 'edit' | 'select' | 'move' | 'dismiss'
+  | 'send' | 'submit' | 'publish' | 'delete' | 'purchase' | 'approve' | 'upload'
+  | 'change_access' | 'expose_sensitive_data' | 'install'
+
+export type ComputerUseActionRisk =
+  | { level: 'none' }
+  | { level: 'unclassified' }
+  | { level: 'low' | 'high'; kind: ComputerUseActionIntentKind; summary: string }
+
 /** Windows interaction strategy for focus-sensitive automation. */
 export type ComputerUseInteractionMode = 'foreground-verified' | 'background-best-effort'
 
@@ -43,6 +58,8 @@ export type ComputerUseInteractionMode = 'foreground-verified' | 'background-bes
 export interface Config {
   /** Desktop-access approval mode. `per-call` keeps every accepted action one-shot. */
   accessPolicy?: ComputerUseAccessPolicy
+  /** Handling for final high-risk actions when accessPolicy does not already prompt per call. */
+  highRiskActionPolicy?: ComputerUseHighRiskActionPolicy
   /** Preferred runtime interaction strategy for focus-sensitive desktop control. */
   interactionMode?: ComputerUseInteractionMode
   /** Whether the runtime may launch the target application when it is not already running. */
@@ -79,6 +96,7 @@ const Reconnect: z<ReconnectConfig> = z.object({
 /** Loader schema for the Computer Use integration. */
 export const Config: z<Config> = z.object({
   accessPolicy: z.union(['per-call', 'allow'] as const).default('per-call'),
+  highRiskActionPolicy: z.union(['confirm', 'deny', 'allow'] as const).default('confirm'),
   interactionMode: z.union(['foreground-verified', 'background-best-effort'] as const).default('foreground-verified'),
   allowAppLaunch: z.boolean().default(false),
   visualIndicator: z.boolean().default(true),
@@ -176,6 +194,7 @@ export const COMPUTER_USE_PROMPT = [
   'If `ModalWindows` is non-empty or an action returns `modal_window_required`, resolve and target the blocking modal WindowRef; never continue against its disabled owner.',
   'Take one action at a time and refresh state after every action. Prefer current semantic targets over coordinates. When an editable element exposes `SetFocus`, call `perform_secondary_action`, require the returned `FocusedElement` to identify the same element, then call `set_value`.',
   'Use `expected_postcondition` when an action has an observable outcome. Treat `ActionStatus: unknown` as unverified: re-observe, and never blindly retry a side-effecting action.',
+  'Every mutating action requires `action_intent` with an accurate `kind` and concise user-readable `summary`; never relabel send, submit, publish, delete, purchase, approve, upload, access changes, sensitive-data exposure, or installation as a lower-risk action to bypass confirmation.',
   'Never reuse stale indexes or state IDs, and verify the target window still has focus before typing, `type_text`, `set_value`, or `press_key` text entry.',
   'Obtain the user’s confirmation immediately before the final high-risk action such as sending, deleting, purchasing, approving, uploading, changing access, or exposing sensitive data.',
 ].join(' ')
@@ -187,6 +206,33 @@ export const COMPUTER_USE_PROMPT = [
  */
 export function isComputerUseTool(toolName: string): boolean {
   return toolName.startsWith(COMPUTER_USE_TOOL_PREFIX)
+}
+
+/** Classify a Computer Use call from its required semantic action declaration. */
+export function classifyComputerUseAction(toolName: string, args: unknown): ComputerUseActionRisk {
+  const actionTools = new Set(['click', 'drag', 'perform_secondary_action', 'press_key', 'scroll', 'set_value', 'type_text'])
+  const tool = toolName.startsWith(COMPUTER_USE_TOOL_PREFIX) ? toolName.slice(COMPUTER_USE_TOOL_PREFIX.length) : ''
+  if (!actionTools.has(tool)) return { level: 'none' }
+  if (typeof args !== 'object' || args === null || Array.isArray(args)) return { level: 'unclassified' }
+
+  const intent = (args as Record<string, unknown>).action_intent
+  if (typeof intent !== 'object' || intent === null || Array.isArray(intent)) return { level: 'unclassified' }
+  const kind = typeof (intent as Record<string, unknown>).kind === 'string'
+    ? (intent as Record<string, unknown>).kind.toString().trim().toLowerCase()
+    : ''
+  const summary = typeof (intent as Record<string, unknown>).summary === 'string'
+    ? (intent as Record<string, unknown>).summary.toString().trim()
+    : ''
+  const lowRiskKinds = new Set(['navigate', 'edit', 'select', 'move', 'dismiss'])
+  const highRiskKinds = new Set(['send', 'submit', 'publish', 'delete', 'purchase', 'approve', 'upload', 'change_access', 'expose_sensitive_data', 'install'])
+  if (summary === '' || Array.from(summary).length > 500 || (!lowRiskKinds.has(kind) && !highRiskKinds.has(kind))) {
+    return { level: 'unclassified' }
+  }
+  return {
+    level: highRiskKinds.has(kind) ? 'high' : 'low',
+    kind: kind as ComputerUseActionIntentKind,
+    summary,
+  }
 }
 
 /** Human-readable denial for an approval outcome that did not grant access. */
@@ -205,7 +251,11 @@ function approvalDenial(outcome: 'rejected' | 'cancelled' | 'unavailable'): stri
  * Reserve the process for one active Agent turn, ask for one desktop action
  * when configured, then continue the waterfall. A granted DSH approval is never retained.
  */
-function installAccessGate(ctx: Context, accessPolicy: ComputerUseAccessPolicy): void {
+function installAccessGate(
+  ctx: Context,
+  accessPolicy: ComputerUseAccessPolicy,
+  highRiskActionPolicy: ComputerUseHighRiskActionPolicy = 'confirm',
+): void {
   let owner: Agent | undefined
   const ownershipDenial = (agent: Agent): PreToolDecision | undefined =>
     owner !== undefined && owner !== agent
@@ -241,23 +291,59 @@ function installAccessGate(ctx: Context, accessPolicy: ComputerUseAccessPolicy):
     }
     const existingOwnershipDenial = ownershipDenial(agent)
     if (existingOwnershipDenial !== undefined) return existingOwnershipDenial
-    if (accessPolicy === 'allow') {
-      const claimDenial = claim(agent)
-      return claimDenial ?? next()
+    const risk = classifyComputerUseAction(exec.name, exec.arguments)
+    if (risk.level === 'unclassified') {
+      return { kind: 'deny', reason: 'Computer Use action tools require a valid action_intent with kind and summary.' }
+    }
+    if (risk.level === 'high' && highRiskActionPolicy === 'deny') {
+      return { kind: 'deny', reason: `High-risk Computer Use action is denied by policy: ${risk.summary}` }
     }
 
-    const approval = ctx.get('approval')
-    if (approval === undefined) {
-      return { kind: 'deny', reason: 'Computer Use requires the approval service for this access policy.' }
+    if (accessPolicy === 'per-call') {
+      const approval = ctx.get('approval')
+      if (approval === undefined) {
+        return { kind: 'deny', reason: 'Computer Use requires the approval service for this access policy.' }
+      }
+      const reason = risk.level === 'high'
+        ? `Allow this high-risk Computer Use action? ${risk.summary}`
+        : 'Allow this Computer Use action to observe or control the live desktop?'
+      const outcome = await approval.request({
+        agent,
+        toolName: exec.name,
+        callId: exec.callId,
+        reason,
+        signal: exec.signal,
+      })
+      if (outcome !== 'allowed-once') return { kind: 'deny', reason: approvalDenial(outcome) }
+    } else if (risk.level === 'high' && highRiskActionPolicy === 'confirm') {
+      const userQuestions = ctx.get('userQuestions')
+      if (userQuestions === undefined) {
+        return { kind: 'deny', reason: 'High-risk Computer Use action was not confirmed because the confirmation service is unavailable.' }
+      }
+      try {
+        const response = await userQuestions.ask({
+          agent,
+          signal: exec.signal,
+          questions: [{
+            id: 'confirm_computer_use_action',
+            header: '电脑控制确认',
+            question: '是否执行这一步高风险电脑操作？',
+            detail: risk.summary,
+            intent: { kind: 'plan-review', approve: '确认执行' },
+            options: [
+              { label: '确认执行', description: '仅允许当前这一项操作。' },
+              { label: '取消', description: '不执行这项操作。' },
+            ],
+          }],
+        })
+        const answer = response.answers.find((item) => item.id === 'confirm_computer_use_action')
+        if (!answer?.selected.includes('确认执行')) {
+          return { kind: 'deny', reason: 'High-risk Computer Use action was not confirmed.' }
+        }
+      } catch {
+        return { kind: 'deny', reason: 'High-risk Computer Use action was not confirmed.' }
+      }
     }
-    const outcome = await approval.request({
-      agent,
-      toolName: exec.name,
-      callId: exec.callId,
-      reason: 'Allow this Computer Use action to observe or control the live desktop?',
-      signal: exec.signal,
-    })
-    if (outcome !== 'allowed-once') return { kind: 'deny', reason: approvalDenial(outcome) }
     const claimDenial = claim(agent)
     return claimDenial ?? next()
   })
@@ -317,6 +403,7 @@ async function notifyTurnEnded(
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
   const accessPolicy = config.accessPolicy ?? 'per-call'
+  const highRiskActionPolicy = config.highRiskActionPolicy ?? 'confirm'
   const interactionMode = config.interactionMode ?? 'foreground-verified'
   const allowAppLaunch = config.allowAppLaunch ?? false
   const visualIndicator = config.visualIndicator ?? true
@@ -341,7 +428,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     order: 116,
     text: COMPUTER_USE_PROMPT,
   })
-  installAccessGate(ctx, accessPolicy)
+  installAccessGate(ctx, accessPolicy, highRiskActionPolicy)
   installUseTracker(ctx, usedAgents)
 
   if (cleanupOnTurnEnd) {

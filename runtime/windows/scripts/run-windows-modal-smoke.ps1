@@ -55,6 +55,12 @@ $timer.Add_Tick({
     $dialogLabel.AutoSize = $true
     $dialogLabel.Location = New-Object System.Drawing.Point(24, 24)
     $dialog.Controls.Add($dialogLabel)
+    $closeButton = New-Object System.Windows.Forms.Button
+    $closeButton.Text = "Close dialog"
+    $closeButton.Location = New-Object System.Drawing.Point(220, 90)
+    $closeButton.Size = New-Object System.Drawing.Size(100, 30)
+    $closeButton.Add_Click({ $dialog.Close() })
+    $dialog.Controls.Add($closeButton)
     [void]$dialog.ShowDialog($main)
 })
 $main.Add_Shown({ $timer.Start() })
@@ -167,6 +173,25 @@ try {
         throw "Modal snapshot did not expose its fixture content"
     }
 
+    $modalText = [string]$modalState.content[0].text
+    $observationMatch = [regex]::Match($modalText, "(?m)^ObservationID:\s*(?<value>\S+)\s*$")
+    $closeMatch = [regex]::Match($modalText, "(?m)^\s*(?<index>\d+)\s+[^\r\n]*Close dialog[^\r\n]*$")
+    if (-not $observationMatch.Success -or -not $closeMatch.Success) {
+        throw "Modal snapshot did not expose its close action and observation id"
+    }
+    $closedModal = Invoke-ComputerUseTool "click" @{
+        window = $modalWindow
+        observation_id = $observationMatch.Groups["value"].Value
+        element_index = $closeMatch.Groups["index"].Value
+        action_intent = @{ kind = "dismiss"; summary = "Close the test modal dialog" }
+        expected_postcondition = @{ type = "window_closed" }
+    }
+    Assert-ToolSuccess $closedModal "close modal"
+    $closedText = [string]$closedModal.content[0].text
+    if ($closedText -notmatch "WindowClosed: true" -or $closedText -notmatch "ActionStatus: applied" -or $closedText -notmatch "Postcondition: type=window_closed satisfied=true") {
+        throw "Closed modal was not verified through the window_closed postcondition"
+    }
+
     [pscustomobject]@{
         status = "passed"
         ownerHwnd = $ownerWindow.hwnd
@@ -174,6 +199,7 @@ try {
         ownerRejected = $true
         modalCandidateExposed = $true
         modalActivated = $true
+        modalCloseVerified = $true
     } | ConvertTo-Json -Depth 5
 } finally {
     if ($null -ne $mcpProcess -and -not $mcpProcess.HasExited) {

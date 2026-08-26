@@ -18,12 +18,27 @@ export declare const COMPUTER_USE_SERVER_NAME = "computer_use";
 export declare const COMPUTER_USE_TOOL_PREFIX = "mcp__computer_use__";
 /** Access policy applied before any Computer Use MCP tool dispatches. */
 export type ComputerUseAccessPolicy = 'per-call' | 'allow';
+/** Policy for semantically high-risk desktop actions after ordinary desktop access is admitted. */
+export type ComputerUseHighRiskActionPolicy = 'confirm' | 'deny' | 'allow';
+/** Intent kinds accepted by every mutating Computer Use tool. */
+export type ComputerUseActionIntentKind = 'navigate' | 'edit' | 'select' | 'move' | 'dismiss' | 'send' | 'submit' | 'publish' | 'delete' | 'purchase' | 'approve' | 'upload' | 'change_access' | 'expose_sensitive_data' | 'install';
+export type ComputerUseActionRisk = {
+    level: 'none';
+} | {
+    level: 'unclassified';
+} | {
+    level: 'low' | 'high';
+    kind: ComputerUseActionIntentKind;
+    summary: string;
+};
 /** Windows interaction strategy for focus-sensitive automation. */
 export type ComputerUseInteractionMode = 'foreground-verified' | 'background-best-effort';
 /** Plugin configuration. */
 export interface Config {
     /** Desktop-access approval mode. `per-call` keeps every accepted action one-shot. */
     accessPolicy?: ComputerUseAccessPolicy;
+    /** Handling for final high-risk actions when accessPolicy does not already prompt per call. */
+    highRiskActionPolicy?: ComputerUseHighRiskActionPolicy;
     /** Preferred runtime interaction strategy for focus-sensitive desktop control. */
     interactionMode?: ComputerUseInteractionMode;
     /** Whether the runtime may launch the target application when it is not already running. */
@@ -84,6 +99,8 @@ export declare const COMPUTER_USE_PROMPT: string;
  * @returns true for names owned by the fixed Computer Use MCP server namespace.
  */
 export declare function isComputerUseTool(toolName: string): boolean;
+/** Classify a Computer Use call from its required semantic action declaration. */
+export declare function classifyComputerUseAction(toolName: string, args: unknown): ComputerUseActionRisk;
 /**
  * Launch one native MCP process and expose its tools in the current Cordis
  * scope. Mount this plugin in an Agent Preset so process state, element indexes,

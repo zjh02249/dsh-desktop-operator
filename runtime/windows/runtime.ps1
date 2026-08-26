@@ -1473,6 +1473,7 @@ function Build-Snapshot([string]$query, $TextLimit = $script:DefaultTextLimit, [
             pid = [int]$process.Id
         }
         window = $window
+        windowClosed = $false
         observationId = $snapshotID
         screenshotId = $snapshotID
         windowTitle = Limit-Text $window.title $TextLimit
@@ -1488,6 +1489,25 @@ function Build-Snapshot([string]$query, $TextLimit = $script:DefaultTextLimit, [
         selectedElements = $selectedElements
         documentText = Get-DocumentText $element $process.Id $TextLimit
         elements = @($rendered.records)
+    }
+}
+
+function New-ClosedWindowSnapshot($process, $window) {
+    $snapshotID = ("{0}:closed:{1}" -f $window.generation, [DateTime]::UtcNow.Ticks)
+    [pscustomobject]@{
+        app = [pscustomobject]@{
+            name = $process.ProcessName
+            bundleIdentifier = $process.ProcessName
+            pid = [int]$process.Id
+        }
+        windowClosed = $true
+        observationId = $snapshotID
+        screenshotId = $snapshotID
+        windowTitle = [string]$window.title
+        modalWindows = @()
+        treeLines = @()
+        selectedElements = @()
+        elements = @()
     }
 }
 
@@ -1570,6 +1590,7 @@ function Test-ExpectedPostcondition($expected, $operation, $snapshot, [IntPtr]$h
     $type = ([string]$expected.type).Trim().ToLowerInvariant()
     $satisfied = $false
     $detail = ""
+    $conditions = @()
     switch ($type) {
         "target_focused" {
             if ($null -eq $operation.element -or $null -eq $snapshot.focusedElement) {
@@ -1607,15 +1628,35 @@ function Test-ExpectedPostcondition($expected, $operation, $snapshot, [IntPtr]$h
             $satisfied = -not [string]::IsNullOrWhiteSpace($before) -and -not [string]::IsNullOrWhiteSpace($after) -and $before -ne $after
             $detail = if ($satisfied) { "screenshot content changed" } else { "screenshot content did not change or could not be compared" }
         }
+        "window_closed" {
+            $satisfied = [bool](Get-OperationPropertyValue $snapshot "windowClosed")
+            $detail = if ($satisfied) { "target window closed" } else { "target window remains open" }
+        }
+        { $_ -eq "all" -or $_ -eq "any" } {
+            foreach ($child in @($expected.conditions)) {
+                $conditions += Test-ExpectedPostcondition $child $operation $snapshot $hwnd
+            }
+            if ($type -eq "all") {
+                $satisfied = $conditions.Count -gt 0 -and @($conditions | Where-Object { -not $_.satisfied }).Count -eq 0
+                $detail = if ($satisfied) { "all postconditions satisfied" } else { "one or more postconditions were not satisfied" }
+            } else {
+                $satisfied = @($conditions | Where-Object { $_.satisfied }).Count -gt 0
+                $detail = if ($satisfied) { "at least one postcondition satisfied" } else { "no postconditions were satisfied" }
+            }
+        }
         default {
             $detail = "unsupported postcondition type"
         }
     }
-    return [pscustomobject]@{
+    $result = [pscustomobject]@{
         type = $type
         satisfied = [bool]$satisfied
         detail = $detail
     }
+    if ($conditions.Count -gt 0) {
+        $result | Add-Member -NotePropertyName conditions -NotePropertyValue @($conditions) -Force
+    }
+    return $result
 }
 
 function List-Apps {
@@ -2114,9 +2155,17 @@ try {
         }
 
         Start-Sleep -Milliseconds 120
-        $snapshot = Build-Snapshot "" (Resolve-TextLimit $operation.text_limit) ([int]$operation.max_tree_nodes) ([int]$operation.max_tree_depth) $window
+        $snapshot = if ([OCUWin32]::IsWindow($hwnd)) {
+            Build-Snapshot "" (Resolve-TextLimit $operation.text_limit) ([int]$operation.max_tree_nodes) ([int]$operation.max_tree_depth) $window
+        } else {
+            New-ClosedWindowSnapshot $process $window
+        }
         $postcondition = Test-ExpectedPostcondition (Get-OperationPropertyValue $operation "expected_postcondition") $operation $snapshot $hwnd
-        $status = if ($null -ne $postcondition -and -not $postcondition.satisfied) { "unknown" } else { "applied" }
+        $status = if ($null -ne $postcondition -and -not $postcondition.satisfied) {
+            "unknown"
+        } else {
+            if ($snapshot.windowClosed -and $null -eq $postcondition) { "unknown" } else { "applied" }
+        }
         if ($null -ne $postcondition) {
             $snapshot | Add-Member -NotePropertyName postcondition -NotePropertyValue $postcondition -Force
         }

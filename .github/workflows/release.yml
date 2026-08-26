@@ -1,0 +1,126 @@
+name: GitHub Releases
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: runtime/windows/go.mod
+
+      - name: Verify tag matches package version
+        shell: pwsh
+        run: |
+          $package = Get-Content -Raw package.json | ConvertFrom-Json
+          $tagVersion = '${{ github.ref_name }}'.TrimStart('v')
+          if ($package.version -ne $tagVersion) {
+            throw "Tag version $tagVersion does not match package version $($package.version)."
+          }
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Test, build, and package
+        shell: pwsh
+        run: pnpm package:plugin
+
+      - name: Prepare release assets and checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts/release -Force | Out-Null
+          $packages = @(Get-ChildItem artifacts/package -Filter '*.tgz' -File)
+          if ($packages.Count -ne 1) {
+            throw "Expected exactly one package archive, found $($packages.Count)."
+          }
+          $package = $packages[0]
+          Copy-Item -LiteralPath $package.FullName -Destination artifacts/release/$($package.Name)
+          Copy-Item runtime/bin/win32-x64/open-computer-use.exe artifacts/release/open-computer-use-win32-x64.exe
+          Copy-Item runtime/bin/win32-arm64/open-computer-use.exe artifacts/release/open-computer-use-win32-arm64.exe
+          Copy-Item runtime/bin/runtime-manifest.json artifacts/release/runtime-manifest.json
+          $lines = Get-ChildItem artifacts/release -File |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash  $($_.Name)"
+            }
+          [System.IO.File]::WriteAllLines(
+            (Join-Path $PWD 'artifacts/release/SHA256SUMS.txt'),
+            $lines,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-plugin-computer-use-${{ github.ref_name }}
+          path: artifacts/release/*
+          if-no-files-found: error
+
+      - name: Create or update GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = Get-ChildItem artifacts/release -File | ForEach-Object FullName
+          if (gh release view '${{ github.ref_name }}' --repo '${{ github.repository }}' 2>$null) {
+            gh release upload '${{ github.ref_name }}' @assets --clobber --repo '${{ github.repository }}'
+          } else {
+            gh release create '${{ github.ref_name }}' @assets `
+              --verify-tag `
+              --generate-notes `
+              --title '${{ github.ref_name }}' `
+              --repo '${{ github.repository }}'
+          }
+
+  backfill-release-pages:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create missing release pages for historical tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            if [[ -z "$tag" ]] || gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              continue
+            fi
+            gh release create "$tag" \
+              --verify-tag \
+              --generate-notes \
+              --title "$tag" \
+              --repo "$GITHUB_REPOSITORY"
+          done < <(git tag --list 'v*' --sort=version:refname)

@@ -4,6 +4,14 @@
   "version": "0.8.0",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zjh02249/dsh-plugin-computer-use.git"
+  },
+  "homepage": "https://github.com/zjh02249/dsh-plugin-computer-use#readme",
+  "bugs": {
+    "url": "https://github.com/zjh02249/dsh-plugin-computer-use/issues"
+  },
   "keywords": [
     "deepseek-harness",
     "dsh-plugin",
@@ -43,6 +51,7 @@
     "cordis.patch.yml",
     "README.md",
     "README.zh.md",
+    "CHANGELOG.md",
     "ROADMAP.md",
     "runtime/**/*",
     "scripts/build-runtime.ps1",

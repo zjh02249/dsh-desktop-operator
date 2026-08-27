@@ -1,0 +1,129 @@
+name: Windows 11 Interactive Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      messaging_app:
+        description: Optional messaging application process/name for prepare-and-restore validation
+        required: false
+        type: string
+      messaging_window_title:
+        description: Optional exact messaging application window title
+        required: false
+        type: string
+      messaging_contact:
+        description: Contact identity to search and verify
+        required: false
+        type: string
+      messaging_search_automation_id:
+        description: Exact AutomationId of the contact search editor
+        required: false
+        type: string
+      messaging_editor_automation_id:
+        description: Exact AutomationId of the message editor
+        required: false
+        type: string
+      messaging_send_automation_id:
+        description: Exact AutomationId of the send control
+        required: false
+        type: string
+      messaging_send_accessible_name:
+        description: Optional exact accessible name of the send control
+        required: false
+        type: string
+      messaging_allow_first_result_fallback:
+        description: Allow Enter on the first result only before exact conversation verification
+        required: true
+        default: false
+        type: boolean
+      action_iterations:
+        description: Deterministic action smoke iterations
+        required: true
+        default: '3'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  interactive-acceptance:
+    runs-on: [self-hosted, windows, windows-11, interactive]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: runtime/windows/go.mod
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Verify Windows 11 interactive host
+        shell: pwsh
+        run: ./scripts/verify-windows-host.ps1 -RequireWindows11 -RequireInteractive
+
+      - name: Build and package
+        shell: pwsh
+        run: pnpm package:plugin
+
+      - name: Run deterministic and physical-display acceptance
+        shell: pwsh
+        env:
+          ACCEPTANCE_ACTION_ITERATIONS: ${{ inputs.action_iterations }}
+        run: |
+          $iterations = [int]$env:ACCEPTANCE_ACTION_ITERATIONS
+          ./runtime/windows/scripts/run-windows-reliability-smoke.ps1 -ActionIterations $iterations |
+            Tee-Object -FilePath windows-11-reliability.json
+
+      - name: Run Qt, Electron, and Office quality matrix
+        shell: pwsh
+        run: |
+          ./runtime/windows/scripts/run-windows-quality-matrix.ps1 -RequireAllCategories |
+            Tee-Object -FilePath windows-11-app-matrix.json
+
+      - name: Run generic messaging prepare-and-restore flow
+        if: inputs.messaging_app != ''
+        shell: pwsh
+        env:
+          MESSAGING_APP: ${{ inputs.messaging_app }}
+          MESSAGING_WINDOW_TITLE: ${{ inputs.messaging_window_title }}
+          MESSAGING_CONTACT: ${{ inputs.messaging_contact }}
+          MESSAGING_SEARCH_AUTOMATION_ID: ${{ inputs.messaging_search_automation_id }}
+          MESSAGING_EDITOR_AUTOMATION_ID: ${{ inputs.messaging_editor_automation_id }}
+          MESSAGING_SEND_AUTOMATION_ID: ${{ inputs.messaging_send_automation_id }}
+          MESSAGING_SEND_ACCESSIBLE_NAME: ${{ inputs.messaging_send_accessible_name }}
+          MESSAGING_ALLOW_FIRST_RESULT_FALLBACK: ${{ inputs.messaging_allow_first_result_fallback }}
+        run: |
+          $scenario = @{
+            AppName = $env:MESSAGING_APP
+            WindowTitle = $env:MESSAGING_WINDOW_TITLE
+            ContactName = $env:MESSAGING_CONTACT
+            SearchAutomationId = $env:MESSAGING_SEARCH_AUTOMATION_ID
+            EditorAutomationId = $env:MESSAGING_EDITOR_AUTOMATION_ID
+            SendAutomationId = $env:MESSAGING_SEND_AUTOMATION_ID
+            SendAccessibleName = $env:MESSAGING_SEND_ACCESSIBLE_NAME
+            PrepareDraft = $true
+          }
+          if ($env:MESSAGING_ALLOW_FIRST_RESULT_FALLBACK -eq 'true') {
+            $scenario.AllowFirstResultFallback = $true
+          }
+          ./runtime/windows/scripts/run-windows-messaging-smoke.ps1 @scenario |
+            Tee-Object -FilePath windows-11-messaging.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-11-acceptance-${{ github.run_id }}
+          path: |
+            windows-11-*.json
+          if-no-files-found: warn

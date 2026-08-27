@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-var version = "0.10.0"
+var version = "0.11.0"
 
 const (
 	mcpProtocolVersion = "2025-03-26"
@@ -495,6 +495,26 @@ func (s *service) dispatchTool(name string, args map[string]any) toolCallResult 
 			return textResult(err.Error(), true)
 		}
 		return s.getWindowState(window, textLimit, maxTreeNodes, maxTreeDepth)
+	case "find_elements":
+		window, err := requiredWindowRef(args)
+		if err != nil {
+			return textResult(err.Error(), true)
+		}
+		limit, err := optionalPositiveInt(args, "limit")
+		if err != nil {
+			return textResult(err.Error(), true)
+		}
+		return s.findElements(
+			window,
+			requiredString(args, "observation_id"),
+			optionalString(args, "name"),
+			optionalString(args, "automation_id"),
+			optionalString(args, "value"),
+			optionalString(args, "control_type"),
+			optionalString(args, "class_name"),
+			optionalString(args, "action"),
+			limit,
+		)
 	case "get_app_state":
 		maxTreeNodes, err := optionalPositiveInt(args, "max_tree_nodes")
 		if err != nil {
@@ -691,6 +711,82 @@ func (s *service) getWindowState(window windowRef, textLimit *textLimit, maxTree
 		return result
 	}
 	return snapshot.result()
+}
+
+type elementSearchResult struct {
+	ObservationID string          `json:"observationId"`
+	MatchCount    int             `json:"matchCount"`
+	Truncated     bool            `json:"truncated"`
+	Elements      []elementRecord `json:"elements"`
+}
+
+func (s *service) findElements(window windowRef, observationID, name, automationID, value, controlType, className, action string, requestedLimit *int) toolCallResult {
+	selectors := []string{name, automationID, value, controlType, className, action}
+	hasSelector := false
+	for _, selector := range selectors {
+		if strings.TrimSpace(selector) != "" {
+			hasSelector = true
+			break
+		}
+	}
+	if !hasSelector {
+		return textResult("find_elements requires at least one selector: name, automation_id, value, control_type, class_name, or action", true)
+	}
+	resolved, err := s.resolveActionTarget(actionTarget{Window: &window, ObservationID: observationID}, actionSnapshotObservation)
+	if err != nil {
+		return textResult(err.Error(), true)
+	}
+	limit := 20
+	if requestedLimit != nil {
+		limit = *requestedLimit
+	}
+	if limit > 100 {
+		return textResult("limit must be from 1 to 100", true)
+	}
+	matches := make([]elementRecord, 0, limit)
+	total := 0
+	for _, element := range resolved.snapshot.Elements {
+		if !containsFold(element.Name, name) ||
+			!containsFold(element.AutomationID, automationID) ||
+			!containsFold(element.Value, value) ||
+			!containsFold(defaultString(element.LocalizedControlType, element.ControlType), controlType) ||
+			!containsFold(element.ClassName, className) ||
+			!containsAnyFold(element.Actions, action) {
+			continue
+		}
+		total++
+		if len(matches) < limit {
+			matches = append(matches, element)
+		}
+	}
+	payload, err := json.Marshal(elementSearchResult{
+		ObservationID: observationID,
+		MatchCount:    total,
+		Truncated:     total > len(matches),
+		Elements:      matches,
+	})
+	if err != nil {
+		return textResult(err.Error(), true)
+	}
+	return textResult(string(payload), false)
+}
+
+func containsFold(value, query string) bool {
+	query = strings.TrimSpace(query)
+	return query == "" || strings.Contains(strings.ToLower(value), strings.ToLower(query))
+}
+
+func containsAnyFold(values []string, query string) bool {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return true
+	}
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), query) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *service) getAppState(app string, textLimit *textLimit, maxTreeNodes, maxTreeDepth *int) toolCallResult {
@@ -1876,6 +1972,22 @@ func toolDefinitions() []toolDefinition {
 			}, []string{"window"}),
 		},
 		{
+			Name:        "find_elements",
+			Description: "Find current accessibility elements inside the latest observation by semantic metadata. Use this after get_window_state instead of guessing an index from a large or dynamic accessibility tree. This tool is part of plugin `Computer Use`.",
+			Annotations: readOnlyAnnotations(),
+			InputSchema: objectSchema(map[string]any{
+				"window":         windowRefProperty("Exact target window from the current observation"),
+				"observation_id": stringProperty("Latest observation ID returned by get_window_state"),
+				"name":           stringProperty("Optional case-insensitive accessible-name substring"),
+				"automation_id":  stringProperty("Optional case-insensitive AutomationId substring"),
+				"value":          stringProperty("Optional case-insensitive accessible-value substring"),
+				"control_type":   stringProperty("Optional case-insensitive localized or programmatic control-type substring"),
+				"class_name":     stringProperty("Optional case-insensitive class-name substring"),
+				"action":         stringProperty("Optional exact supported action such as SetValue, SetFocus, Invoke, or Select"),
+				"limit":          positiveIntegerProperty("Maximum matches to return, from 1 to 100. Defaults to 20."),
+			}, []string{"window", "observation_id"}),
+		},
+		{
 			Name:        "get_app_state",
 			Description: "Get the state of an already running app's key window and return a screenshot and accessibility tree. This must be called once per assistant turn before interacting with the app. This tool is part of plugin `Computer Use`.",
 			Annotations: readOnlyAnnotations(),
@@ -2223,6 +2335,16 @@ func runCLI(args []string, stdout io.Writer) error {
 			return err
 		}
 		return json.NewEncoder(stdout).Encode(status)
+	case "coordinate-self-test":
+		response, err := newService().executePS(psRequest{Tool: "coordinate_self_test"})
+		if err != nil {
+			return err
+		}
+		if !response.OK {
+			return errors.New(responseErrorText(response))
+		}
+		fmt.Fprintln(stdout, response.Text)
+		return nil
 	case "turn-ended":
 		hideControlIndicator()
 		return nil
@@ -2716,6 +2838,8 @@ func helpText(command string) string {
 		return "Usage:\n  open-computer-use.exe action-audit [limit]\n\nPrint up to 1000 redacted persistent action audit events.\n"
 	case "action-journal-prune":
 		return "Usage:\n  open-computer-use.exe action-journal-prune\n\nApply configured retention and event limits to the persistent action journal.\n"
+	case "coordinate-self-test":
+		return "Usage:\n  open-computer-use.exe coordinate-self-test\n\nExercise negative-origin, mixed-scale, and out-of-bounds coordinate mapping in the embedded Windows runtime.\n"
 	default:
 		return `Open Computer Use for Windows
 
@@ -2728,6 +2852,7 @@ Commands:
   doctor               Print Windows runtime notes.
   action-audit [limit]  Print redacted persistent action audit events.
   action-journal-prune  Compact the persistent action journal.
+  coordinate-self-test  Verify negative-origin and mixed-scale coordinate mapping.
   turn-ended           Hide the desktop control indicator and clear transient turn state.
   indicator-demo       Show the click-through control indicator for 5 seconds.
   list-apps            Print running apps with top-level windows.

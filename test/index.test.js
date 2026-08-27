@@ -194,6 +194,9 @@ test('COMPUTER_USE_PROMPT preserves v2, fallback, focus, and confirmation guidan
   assert.match(COMPUTER_USE_PROMPT, /latest `screenshot_id`/)
   assert.match(COMPUTER_USE_PROMPT, /SetFocus/)
   assert.match(COMPUTER_USE_PROMPT, /FocusedElement/)
+  assert.match(COMPUTER_USE_PROMPT, /find_elements/)
+  assert.match(COMPUTER_USE_PROMPT, /accessibility trees/)
+  assert.doesNotMatch(COMPUTER_USE_PROMPT, /DingTalk|钉钉/)
   assert.match(COMPUTER_USE_PROMPT, /ModalWindows/)
   assert.match(COMPUTER_USE_PROMPT, /modal_window_required/)
   assert.match(COMPUTER_USE_PROMPT, /expected_postcondition/)
@@ -302,9 +305,9 @@ test('Computer Use action risk classification fails closed without a declared in
   )
   assert.deepEqual(
     JSON.parse(JSON.stringify(classifyComputerUseAction('mcp__computer_use__click', {
-      action_intent: { kind: 'send', summary: 'Send the prepared DingTalk message' },
+      action_intent: { kind: 'send', summary: 'Send the prepared message' },
     }))),
-    { level: 'high', kind: 'send', summary: 'Send the prepared DingTalk message' },
+    { level: 'high', kind: 'send', summary: 'Send the prepared message' },
   )
 })
 
@@ -346,12 +349,12 @@ test('high-risk Computer Use actions require an explicit UI confirmation under a
       name: 'mcp__computer_use__click',
       callId: 'call-high',
       agent,
-      arguments: { action_intent: { kind: 'send', summary: 'Send the prepared DingTalk message' } },
+      arguments: { action_intent: { kind: 'send', summary: 'Send the prepared message' } },
     }, async () => continueDecision),
     continueDecision,
   )
   assert.equal(questions.length, 1)
-  assert.match(questions[0].questions[0].detail, /Send the prepared DingTalk message/)
+  assert.match(questions[0].questions[0].detail, /Send the prepared message/)
   assert.deepEqual(JSON.parse(JSON.stringify(questions[0].questions[0].intent)), { kind: 'plan-review', approve: '确认执行' })
 })
 

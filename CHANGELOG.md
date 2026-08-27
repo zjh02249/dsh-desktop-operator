@@ -2,6 +2,27 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。在 `1.0.0` 之前，DSH 预发布 API 或 Computer Use 工具协议的变化仍可能带来不兼容调整。
 
+## [0.11.0] - 2026-08-27
+
+### 新增
+
+- 新增只读 `find_elements` 工具，在当前 `WindowRef` 与 `observation_id` 内按名称、AutomationId、值、控件类型、类名和可用动作筛选语义元素；默认最多返回 20 项，硬上限 100 项。
+- 新增负坐标、混合缩放和越界拒绝的确定性坐标自检，并在存在负坐标物理显示器时自动运行真实动作 smoke。
+- 新增 Qt、Electron 和 Office 兼容应用质量矩阵、Windows 11 交互式自托管验收工作流与主机证据检查。
+- 新增参数驱动的通用消息类应用验收器，应用、窗口、搜索框、消息编辑器和发送控件均由调用方显式提供；联系人必须显式传入，仓库不内置个人姓名。
+
+### 安全与可靠性
+
+- UIA 直接聚焦失败后的物理点击回退，必须先证明点击点命中目标元素或其子节点；同进程内任意焦点不再被视为成功，写入后仍需精确值回读。
+- 仅当动作后的原窗口句柄已经确认失效时，才把快照竞争条件恢复为 `window_closed`；普通 stale/window-not-found 错误继续失败关闭。
+- 生产系统提示与验收脚本均保持应用无关；具体桌面程序只允许作为外部质量矩阵数据或兼容性证据，不会向模型注入应用专用操作流程。
+
+### 本次实机证据与边界
+
+- Windows 10 22H2 x64 上，WPF/WinForms 可靠性 smoke、Qt 钉钉只读语义矩阵和 Electron DeepSeek Harness/ZCode 矩阵通过。
+- 当前两台显示器均为非负坐标布局，负坐标通过确定性映射自检，尚未完成负坐标物理显示器动作验收。
+- 当前主机未安装 Office/WPS，Windows 11 自托管工作流已建立但尚未在合格主机执行；这些缺口不会被描述为已实机通过。
+
 ## [0.10.0] - 2026-08-27
 
 ### 新增
@@ -95,8 +116,9 @@
 - 提供一键测试、x64/arm64 构建、打包和归档完整性校验。
 - 建立长期 Codex Computer Use 能力对齐路线。
 
-[0.9.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.9.0
+[0.11.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.11.0
 [0.10.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.10.0
+[0.9.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.9.0
 [0.8.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.8.0
 [0.7.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.7.0
 [0.6.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.6.0

@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "categories": [
+    {
+      "id": "qt",
+      "framework": "Qt",
+      "required": true,
+      "candidates": [
+        {
+          "app": "DingTalk",
+          "product": "DingTalk",
+          "selectors": [
+            { "automation_id": "search_edit", "action": "SetValue", "minMatches": 1 },
+            { "automation_id": "textEdit", "action": "SetValue", "minMatches": 1 },
+            { "automation_id": "combo_send_button_widget", "action": "Invoke", "minMatches": 1 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "electron",
+      "framework": "Electron",
+      "required": true,
+      "candidates": [
+        { "app": "DeepSeek Harness", "product": "DeepSeek Harness" },
+        { "app": "ZCode", "product": "ZCode" },
+        { "app": "ChatGPT", "product": "ChatGPT" }
+      ]
+    },
+    {
+      "id": "office",
+      "framework": "Office-compatible desktop suite",
+      "required": true,
+      "candidates": [
+        { "app": "WINWORD", "product": "Microsoft Word" },
+        { "app": "EXCEL", "product": "Microsoft Excel" },
+        { "app": "POWERPNT", "product": "Microsoft PowerPoint" },
+        { "app": "wps", "product": "WPS Writer" },
+        { "app": "et", "product": "WPS Spreadsheets" },
+        { "app": "wpp", "product": "WPS Presentation" }
+      ]
+    }
+  ]
+}

@@ -60,6 +60,8 @@ try {
         "package/lib/index.js",
         "package/README.en.md",
         "package/CHANGELOG.md",
+        "package/quality/windows-app-matrix.json",
+        "package/scripts/verify-windows-host.ps1",
         "package/runtime/bin/runtime-manifest.json",
         "package/runtime/bin/win32-x64/open-computer-use.exe",
         "package/runtime/bin/win32-arm64/open-computer-use.exe",
@@ -71,7 +73,9 @@ try {
         "package/runtime/windows/runtime.ps1",
         "package/runtime/windows/scripts/run-windows-action-smoke.ps1",
         "package/runtime/windows/scripts/run-windows-capture-smoke.ps1",
+        "package/runtime/windows/scripts/run-windows-messaging-smoke.ps1",
         "package/runtime/windows/scripts/run-windows-modal-smoke.ps1",
+        "package/runtime/windows/scripts/run-windows-quality-matrix.ps1",
         "package/runtime/windows/scripts/run-windows-reliability-smoke.ps1",
         "package/runtime/windows/scripts/run-windows-window-smoke.ps1",
         "package/runtime/LICENSE.open-computer-use",
@@ -114,8 +118,20 @@ try {
         if ($mcpInfo.serverInfo.version -ne [string]$package.version) {
             throw "Packaged MCP metadata version mismatch. Expected $($package.version), received '$($mcpInfo.serverInfo.version)'."
         }
+        $coordinateSelfTestJson = [string](& $packagedRuntime coordinate-self-test)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Packaged coordinate mapping self-test failed with exit code $LASTEXITCODE."
+        }
+        try {
+            $coordinateSelfTest = $coordinateSelfTestJson | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            throw "Packaged coordinate mapping self-test returned invalid JSON: $coordinateSelfTestJson"
+        }
+        if ($coordinateSelfTest.status -ne "passed" -or -not $coordinateSelfTest.outOfBoundsRejected -or $coordinateSelfTest.negativeTopLeft.x -ne -1920) {
+            throw "Packaged coordinate mapping self-test returned unexpected evidence: $coordinateSelfTestJson"
+        }
         $toolNames = @($mcpInfo.tools | ForEach-Object { $_.name })
-        $requiredTools = @("list_windows", "get_window", "activate_window", "get_window_state", "click", "type_text", "press_key", "set_value")
+        $requiredTools = @("list_windows", "get_window", "activate_window", "get_window_state", "find_elements", "click", "type_text", "press_key", "set_value")
         $missingTools = @($requiredTools | Where-Object { $_ -notin $toolNames })
         if ($missingTools.Count -gt 0) {
             throw "Packaged MCP runtime is missing required tools: $($missingTools -join ', ')"
@@ -142,6 +158,7 @@ try {
         runtimeTargets = @("win32-x64", "win32-arm64")
         runtimeVersion = $runtimeVersion.Trim()
         mcpToolCount = $toolNames.Count
+        coordinateSelfTest = $coordinateSelfTest
     } | ConvertTo-Json -Depth 4
 } finally {
     Pop-Location

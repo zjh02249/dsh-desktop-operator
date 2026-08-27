@@ -2,7 +2,7 @@
 
 > 🌐 **语言切换 / Language:** **简体中文** | [English](README.en.md)
 
-[![Version](https://img.shields.io/badge/version-0.10.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.11.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20arm64-0078d4)](#系统兼容性)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -10,7 +10,9 @@
 
 项目目标不是简单模拟鼠标键盘，而是逐步复刻 Codex Computer Use 的关键工程能力：精确选择窗口、观察界面、优先使用无障碍元素、执行动作、验证结果、处理模态窗口、在敏感动作前确认，并让用户清楚看到电脑正在被控制。
 
-> 当前开发版本：`0.10.0`；公开发布状态以 [Releases](https://github.com/zjh02249/dsh-desktop-operator/releases) 为准。项目 Windows-first，可供开发者试用。已在 Windows 10 x64 与 DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6` 上完成真实桌面验证；尚不应视为跨系统、跨应用都达到生产级稳定性的最终版本。
+核心插件不包含面向某个具体桌面程序的操作分支、控件 ID 或联系人。真实应用名称只作为可替换的质量矩阵数据和兼容性证据；消息流程验收器由调用方显式传入应用、窗口与控件选择器。
+
+> 当前开发版本：`0.11.0`；公开发布状态以 [Releases](https://github.com/zjh02249/dsh-desktop-operator/releases) 为准。项目 Windows-first，可供开发者试用。已在 Windows 10 x64 与 DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6` 上完成真实桌面验证；尚不应视为跨系统、跨应用都达到生产级稳定性的最终版本。
 
 ### 项目关系与归属
 
@@ -28,29 +30,29 @@
 dsh-desktop-operator-<版本号>.tgz
 ```
 
-例如 `0.10.0` 对应：
+例如 `0.11.0` 对应：
 
 ```text
-dsh-desktop-operator-0.10.0.tgz
+dsh-desktop-operator-0.11.0.tgz
 ```
 
 如果你刚从源码构建，安装包位于：
 
 ```text
-artifacts/package/dsh-desktop-operator-0.10.0.tgz
+artifacts/package/dsh-desktop-operator-0.11.0.tgz
 ```
 
 ### 2. 安装到 DSH Web Profile
 
 ```powershell
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
 ```
 
 如果终端找不到 `dsh`，使用 DeepSeek Harness 自带的 DSH CLI：
 
 ```powershell
 $DshCli = "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js"
-node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
+node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
 ```
 
 ### 3. 挂载到 Agent Preset
@@ -103,7 +105,7 @@ $PluginRoot = "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-desktop-opera
 
 ```powershell
 dsh plugin --profile web remove '@valkia/dsh-plugin-computer-use'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
 ```
 
 ### 升级已有 `dsh-desktop-operator` 安装
@@ -112,7 +114,7 @@ DSH/pnpm 可能复用同名本地包缓存。升级时建议先移除旧包，�
 
 ```powershell
 dsh plugin --profile web remove 'dsh-desktop-operator'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
 ```
 
 随后重启 DeepSeek Harness，并使用新会话重新验证版本。
@@ -121,8 +123,8 @@ dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
 
 | 环境 | 状态 | 说明 |
 |---|---|---|
-| Windows 10 x64 | **已验证** | 当前开发机为 Windows 10 22H2 / Build 19045；真实 WPF、WinForms 和部分钉钉流程已测试。 |
-| Windows 11 x64 | **预计兼容，待完整实机矩阵** | 使用的 WGC、UI Automation 和 SendInput API 均受支持，但尚未完成完整回归。 |
+| Windows 10 x64 | **已验证** | 当前开发机为 Windows 10 22H2 / Build 19045；WPF、WinForms、Qt 钉钉只读语义矩阵以及 Electron DeepSeek Harness/ZCode 矩阵已测试。 |
+| Windows 11 x64 | **工作流已就绪，待合格实机** | 提供要求 `windows-11` 与 `interactive` 标签的自托管验收工作流；当前主机不是 Windows 11，不能宣称实机通过。 |
 | Windows arm64 | **已构建，未实机验证** | Release 包含 `win32-arm64` 二进制，当前只完成交叉编译和包完整性检查。 |
 | macOS | **未实现** | 当前没有 macOS runtime、权限适配或安装产物。 |
 | Linux | **未实现** | 当前没有 X11/Wayland runtime 或安装产物。 |
@@ -146,8 +148,10 @@ dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
 |---|---|
 | 标准 WPF 控件 | **已验证**：窗口观察、焦点、`set_value`、点击、组合后置条件、WGC 截图 |
 | 标准 WinForms 控件 | **已验证**：owner/modal 识别、切换阻断对话框、`window_closed` |
-| 钉钉 Windows 客户端 | **部分验证**：窗口解析、激活、截图和状态读取可用；联系人搜索、中文输入和最终发送的完整实机闭环仍待完成 |
-| Electron / Qt / WinUI / UWP / Office | **部分能力可能可用，未完成系统性矩阵** |
+| 钉钉 Windows 客户端（Qt 验收样本） | **部分验证**：窗口解析、激活、WGC 截图、语义搜索框/消息框/发送控件查询可用；完整草稿准备/恢复与发送前确认仍待无副作用实机闭环 |
+| Electron | **本机矩阵通过**：DeepSeek Harness 与 ZCode 的窗口观察、WGC 捕获和语义元素检索通过 |
+| Office/WPS | **矩阵已定义，当前主机无可用应用**：不宣称实机通过 |
+| WinUI / UWP / 自绘控件 | **未形成完整系统性矩阵** |
 | 游戏、DirectX、自绘画布 | **不保证**：可能只能使用截图坐标，缺少可靠语义元素 |
 | 浏览器网页 | 可控制浏览器窗口，但本项目不是浏览器专用 DOM 自动化工具 |
 
@@ -170,6 +174,7 @@ dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
 - 检测截图后窗口移动/缩放，拒绝继续使用过期坐标。
 - 识别最小化窗口并要求先恢复、重新观察。
 - 暴露 UI Automation 树、元素索引、focused element 和模态窗口关系。
+- 提供只读 `find_elements`，在当前观察内按可访问名称、AutomationId、值、控件类型、类名和动作检索大型 Qt/Electron/Office UIA 树。
 
 ### 桌面动作
 
@@ -177,6 +182,7 @@ dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
 - 前台验证模式下使用真实 Windows `SendInput`，并在需要输入前核验目标窗口和焦点。
 - `set_value` 优先使用 UIA `ValuePattern`，必要时使用已验证焦点的输入回退；读回不一致不会报告成功。
 - 鼠标坐标从截图像素映射到物理窗口坐标，并拒绝越界点。
+- 内置负坐标、混合缩放和越界拒绝自检；真实负坐标显示器存在时，可靠性 smoke 会自动增加物理动作验收。
 - 动作后可验证 `target_focused`、`target_value_equals`、`text_contains`、`foreground_window`、`screenshot_changed` 和 `window_closed`。
 - 支持最多 8 个非嵌套 `all`/`any` 后置条件组合。
 - 只有结果得到验证时返回 `ActionStatus: applied`；无法判断时返回 `unknown`，避免假报成功。
@@ -210,10 +216,10 @@ dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
 
 ## 部分实现、仍需增强
 
-- 多显示器、负坐标以及 100%/125%/150%/200% 混合 DPI 的完整组合矩阵。
-- Windows 11、Windows arm64 真实设备上的长期回归。
-- Electron、Qt、WinUI、UWP、Office 与复杂自绘控件的应用适配矩阵。
-- 钉钉真实联系人搜索、中文输入、消息内容复核和“发送前确认”的完整端到端验收。
+- 负坐标物理显示器和 100%/125%/150%/200% 混合 DPI 的完整组合矩阵；当前只完成负坐标确定性自检与 125%/200% 实机拓扑。
+- Windows 11、Windows arm64 真实设备上的长期回归；Windows 11 自托管交互工作流已就绪但尚未执行。
+- Office/WPS、WinUI、UWP 与复杂自绘控件的实机矩阵；当前 Qt 与 Electron 样本已通过，Office 类应用在本机不可用。
+- 参数化消息类应用的真实联系人搜索、中文输入、消息内容复核和“发送前确认”完整端到端验收；默认不猜测搜索结果，也不执行发送。
 - 截图作为模型图片附件依赖 DSH 挂载 `ctx.attachments`，并要求所选模型路由支持图片输入。
 - 审计导出、按动作查询和受控诊断包仍需增强；当前提供脱敏 JSON CLI 查看，不持久化截图或文本正文。
 - 风险动作分类目前主要依赖声明、控件标签和策略，尚不是完整的语义安全引擎。
@@ -233,7 +239,7 @@ dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
 
 ## 工具列表
 
-运行时当前暴露 14 个 MCP 工具：
+运行时当前暴露 15 个 MCP 工具：
 
 | 工具 | 作用 |
 |---|---|
@@ -242,6 +248,7 @@ dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
 | `get_app_state` | 获取应用级截图和无障碍状态 |
 | `get_window` | 解析一个精确窗口 |
 | `get_window_state` | 获取窗口截图、UIA 元素、焦点和模态关系 |
+| `find_elements` | 在当前观察内按语义元数据检索元素 |
 | `launch_app` | 在策略允许时启动应用 |
 | `activate_window` | 恢复并激活窗口 |
 | `click` | 点击元素索引或截图坐标 |

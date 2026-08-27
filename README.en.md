@@ -2,7 +2,7 @@
 
 > 🌐 **Language / 语言:** [简体中文](README.md) | **English**
 
-[![Version](https://img.shields.io/badge/version-0.10.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.11.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20arm64-0078d4)](#platform-compatibility)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -10,7 +10,9 @@
 
 The goal is more than basic mouse and keyboard emulation. This project is progressively implementing the engineering foundations behind a Codex-like Computer Use experience: exact window selection, UI observation, accessibility-first targeting, action execution, post-action verification, modal recovery, confirmation before consequential actions, and an obvious visual indication while the computer is being controlled.
 
-> Current development version: `0.10.0`; see [Releases](https://github.com/zjh02249/dsh-desktop-operator/releases) for publication status. The project is Windows-first and suitable for developer evaluation. Real desktop tests have passed on Windows 10 x64 with DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6`. This is not yet a production-grade promise across every OS and desktop application.
+The core plugin contains no operation branch, control ID, or contact tied to a specific desktop application. Real product names are replaceable quality-matrix data and compatibility evidence only; the messaging-flow acceptance runner receives its application, window, and control selectors explicitly from the caller.
+
+> Current development version: `0.11.0`; see [Releases](https://github.com/zjh02249/dsh-desktop-operator/releases) for publication status. The project is Windows-first and suitable for developer evaluation. Real desktop tests have passed on Windows 10 x64 with DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6`. This is not yet a production-grade promise across every OS and desktop application.
 
 ### Project relationship and attribution
 
@@ -28,29 +30,29 @@ Download the latest package from [GitHub Releases](https://github.com/zjh02249/d
 dsh-desktop-operator-<version>.tgz
 ```
 
-For example, release `0.10.0` contains:
+For example, release `0.11.0` contains:
 
 ```text
-dsh-desktop-operator-0.10.0.tgz
+dsh-desktop-operator-0.11.0.tgz
 ```
 
 When building from source, the same archive is generated under:
 
 ```text
-artifacts/package/dsh-desktop-operator-0.10.0.tgz
+artifacts/package/dsh-desktop-operator-0.11.0.tgz
 ```
 
 ### 2. Install it into the DSH Web Profile
 
 ```powershell
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
 ```
 
 If `dsh` is not on `PATH`, call the CLI bundled with DeepSeek Harness:
 
 ```powershell
 $DshCli = "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js"
-node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
+node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
 ```
 
 ### 3. Mount it in an Agent Preset
@@ -103,7 +105,7 @@ If `@valkia/dsh-plugin-computer-use` was installed previously, remove the old ID
 
 ```powershell
 dsh plugin --profile web remove '@valkia/dsh-plugin-computer-use'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
 ```
 
 ### Upgrade an existing `dsh-desktop-operator` installation
@@ -112,7 +114,7 @@ DSH/pnpm may reuse a cached local archive with the same filename. Remove the ins
 
 ```powershell
 dsh plugin --profile web remove 'dsh-desktop-operator'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
 ```
 
 Restart DeepSeek Harness, open a new session, and verify both versions again.
@@ -121,8 +123,8 @@ Restart DeepSeek Harness, open a new session, and verify both versions again.
 
 | Environment | Status | Notes |
 |---|---|---|
-| Windows 10 x64 | **Verified** | The development system is Windows 10 22H2 / Build 19045. Real WPF, WinForms, and partial DingTalk flows have been exercised. |
-| Windows 11 x64 | **Expected to work; full physical matrix pending** | WGC, UI Automation, and SendInput are supported, but the complete regression matrix has not yet run. |
+| Windows 10 x64 | **Verified** | The development system is Windows 10 22H2 / Build 19045. WPF, WinForms, the read-only Qt/DingTalk semantic matrix, and Electron DeepSeek Harness/ZCode matrix have been exercised. |
+| Windows 11 x64 | **Workflow ready; qualified hardware pending** | A self-hosted workflow requires `windows-11` and `interactive` runner labels. The current host is not Windows 11, so no physical pass is claimed. |
 | Windows arm64 | **Built; not physically tested** | The package includes a `win32-arm64` binary. Cross-compilation and archive checks pass. |
 | macOS | **Not implemented** | No macOS runtime, permission integration, or release artifact exists yet. |
 | Linux | **Not implemented** | No X11/Wayland runtime or release artifact exists yet. |
@@ -146,8 +148,10 @@ Restart DeepSeek Harness, open a new session, and verify both versions again.
 |---|---|
 | Standard WPF controls | **Verified:** window observation, focus, `set_value`, click, combined postconditions, and WGC capture |
 | Standard WinForms controls | **Verified:** owner/modal detection, blocking-dialog recovery, and `window_closed` |
-| DingTalk for Windows | **Partially verified:** window resolution, activation, capture, and state reading work; the full contact-search, Chinese-input, review, and final-send flow still needs live acceptance |
-| Electron / Qt / WinUI / UWP / Office | **Some capabilities may work; no systematic matrix yet** |
+| DingTalk for Windows (Qt acceptance sample) | **Partially verified:** window resolution, activation, WGC capture, and semantic lookup of search/editor/send controls work; safe draft prepare/restore and pre-send confirmation still need a complete non-sending live pass |
+| Electron | **Host matrix passed:** DeepSeek Harness and ZCode window observation, WGC capture, and semantic element lookup passed |
+| Office/WPS | **Matrix defined; no app available on this host:** no physical pass is claimed |
+| WinUI / UWP / custom-drawn controls | **No complete systematic matrix yet** |
 | Games, DirectX, and custom-drawn canvases | **Not guaranteed:** only screenshot coordinates may be available, without reliable semantic elements |
 | Browser pages | Browser windows can be controlled, but this is not a browser-specific DOM automation tool |
 
@@ -172,6 +176,7 @@ Restart DeepSeek Harness, open a new session, and verify both versions again.
 - Rejects stale coordinate input when the window moves or resizes after capture.
 - Detects minimized windows and requires restoration plus a fresh observation.
 - Exposes UI Automation elements, focused element identity, and owned modal relationships.
+- Provides read-only `find_elements` queries over the current observation by accessible name, AutomationId, value, control type, class name, and supported action.
 
 ### Desktop actions and verification
 
@@ -179,6 +184,7 @@ Restart DeepSeek Harness, open a new session, and verify both versions again.
 - Uses real Windows `SendInput` in foreground-verified mode and validates the target window and focus before text input.
 - `set_value` prefers UIA `ValuePattern`, falls back to input only with verified focus, and requires a matching read-back before reporting success.
 - Maps screenshot pixels to physical window coordinates and rejects out-of-bounds points.
+- Includes deterministic negative-origin, mixed-scale, and bounds-rejection checks; reliability smoke adds a physical negative-display action run when such a display exists.
 - Supports `target_focused`, `target_value_equals`, `text_contains`, `foreground_window`, `screenshot_changed`, and `window_closed` postconditions.
 - Combines up to eight non-nested postconditions with `all` or `any`.
 - Returns `ActionStatus: applied` only for a verified outcome. An unevaluable result is `unknown`, never a fabricated success.
@@ -212,10 +218,10 @@ Restart DeepSeek Harness, open a new session, and verify both versions again.
 
 ## Partially implemented / still being strengthened
 
-- The complete multi-monitor, negative-coordinate, and mixed 100%/125%/150%/200% DPI matrix.
-- Long-running physical regression on Windows 11 and Windows arm64.
-- Systematic Electron, Qt, WinUI, UWP, Office, and custom-drawn control coverage.
-- A full live DingTalk flow covering contact search, Chinese input, message review, and confirmation immediately before send.
+- The full physical negative-coordinate and mixed 100%/125%/150%/200% DPI matrix. Negative-origin math is deterministic-tested; this host provided a 125%/200% physical topology without negative coordinates.
+- Long-running physical regression on Windows 11 and Windows arm64. The Windows 11 self-hosted interactive workflow is ready but has not run on qualified hardware.
+- Physical Office/WPS, WinUI, UWP, and custom-drawn coverage. Qt and Electron samples pass on the current host; no Office-compatible app is available here.
+- A complete live run of the parameterized messaging scenario covering contact search, Chinese input, message review, and confirmation immediately before send. It does not guess a search result or send by default.
 - Screenshot attachment depends on DSH mounting `ctx.attachments` and on the selected model route supporting image input.
 - Export, per-action querying, and controlled diagnostic bundles still need strengthening. The current CLI exposes redacted JSON and never persists screenshots or text bodies.
 - Risk classification currently combines declared intent, control labels, and policy; it is not a complete semantic safety engine.
@@ -235,7 +241,7 @@ See [ROADMAP.md](ROADMAP.md) for the longer-term Codex Computer Use parity plan.
 
 ## MCP tools
 
-The runtime currently exposes 14 MCP tools:
+The runtime currently exposes 15 MCP tools:
 
 | Tool | Purpose |
 |---|---|
@@ -244,6 +250,7 @@ The runtime currently exposes 14 MCP tools:
 | `get_app_state` | Capture application-level screenshot and accessibility state |
 | `get_window` | Resolve one exact target window |
 | `get_window_state` | Capture window pixels, UIA elements, focus, and modal relationships |
+| `find_elements` | Search current elements by semantic metadata |
 | `launch_app` | Launch an application when policy allows it |
 | `activate_window` | Restore and activate a target window |
 | `click` | Click a current element index or screenshot coordinate |

@@ -2,7 +2,11 @@
 param(
     [string]$RuntimePath = "",
 
-    [string]$JournalPath = ""
+    [string]$JournalPath = "",
+
+    [int]$FixtureLeft = 80,
+
+    [int]$FixtureTop = 80
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,7 +41,11 @@ $fixtureProcess = $null
 $mcpProcess = $null
 
 $fixtureSource = @'
-param([Parameter(Mandatory = $true)][string]$Title)
+param(
+    [Parameter(Mandatory = $true)][string]$Title,
+    [int]$Left = 80,
+    [int]$Top = 80
+)
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName PresentationFramework
@@ -46,8 +54,8 @@ Add-Type -AssemblyName WindowsBase
 $window = New-Object System.Windows.Window
 $window.Title = $Title
 $window.WindowStartupLocation = [System.Windows.WindowStartupLocation]::Manual
-$window.Left = 80
-$window.Top = 80
+$window.Left = $Left
+$window.Top = $Top
 $window.Width = 440
 $window.Height = 240
 
@@ -113,8 +121,9 @@ function Invoke-McpRequest([string]$Method, $Params) {
     $request = [ordered]@{ jsonrpc = "2.0"; id = $requestID; method = $Method }
     if ($null -ne $Params) { $request.params = $Params }
     $json = $request | ConvertTo-Json -Compress -Depth 30
-    $script:mcpProcess.StandardInput.WriteLine($json)
-    $script:mcpProcess.StandardInput.Flush()
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($json + [Environment]::NewLine)
+    $script:mcpProcess.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+    $script:mcpProcess.StandardInput.BaseStream.Flush()
     Write-Verbose "Waiting for MCP response id=$requestID method=$Method"
     $readTask = $script:mcpProcess.StandardOutput.ReadLineAsync()
     if (-not $readTask.Wait(20000)) {
@@ -181,7 +190,7 @@ try {
     [System.IO.File]::WriteAllText($fixtureFile, $fixtureSource, $utf8NoBom)
     $fixtureStartInfo = New-Object System.Diagnostics.ProcessStartInfo
     $fixtureStartInfo.FileName = "powershell.exe"
-    $fixtureStartInfo.Arguments = "-NoProfile -STA -ExecutionPolicy Bypass -File `"$fixtureFile`" -Title `"$fixtureTitle`""
+    $fixtureStartInfo.Arguments = "-NoProfile -STA -ExecutionPolicy Bypass -File `"$fixtureFile`" -Title `"$fixtureTitle`" -Left $FixtureLeft -Top $FixtureTop"
     $fixtureStartInfo.UseShellExecute = $false
     $fixtureStartInfo.CreateNoWindow = $true
     $fixtureProcess = [System.Diagnostics.Process]::Start($fixtureStartInfo)
@@ -197,6 +206,29 @@ try {
         if (-not $resolved.isError) { $window = $resolved.content[0].text | ConvertFrom-Json }
     }
     if ($null -eq $window) { throw "Fixture window did not become available" }
+
+    $fixtureRect = New-Object OCUActionSmokeWin32+RECT
+    if (-not [OCUActionSmokeWin32]::GetWindowRect([IntPtr][long]$window.hwnd, [ref]$fixtureRect)) {
+        throw "Could not read fixture bounds before positioning"
+    }
+    $fixtureWidth = $fixtureRect.Right - $fixtureRect.Left
+    $fixtureHeight = $fixtureRect.Bottom - $fixtureRect.Top
+    if (-not [OCUActionSmokeWin32]::SetWindowPos([IntPtr][long]$window.hwnd, [IntPtr]::Zero, $FixtureLeft, $FixtureTop, $fixtureWidth, $fixtureHeight, 0x0014)) {
+        throw "Could not position fixture at the requested physical-screen origin"
+    }
+    Start-Sleep -Milliseconds 150
+    if (-not [OCUActionSmokeWin32]::GetWindowRect([IntPtr][long]$window.hwnd, [ref]$fixtureRect)) {
+        throw "Could not verify fixture bounds after positioning"
+    }
+    if ($fixtureRect.Left -ne $FixtureLeft -or $fixtureRect.Top -ne $FixtureTop) {
+        throw "Fixture origin mismatch. Requested=($FixtureLeft,$FixtureTop) actual=($($fixtureRect.Left),$($fixtureRect.Top))"
+    }
+    $fixtureInitialBounds = [pscustomobject]@{
+        x = $fixtureRect.Left
+        y = $fixtureRect.Top
+        width = $fixtureRect.Right - $fixtureRect.Left
+        height = $fixtureRect.Bottom - $fixtureRect.Top
+    }
 
     $activated = Invoke-ComputerUseTool "activate_window" @{ window = $window }
     Assert-ToolSuccess $activated "activate_window"
@@ -409,6 +441,8 @@ try {
         pressKeyVerified = $true
         persistentActionAuditVerified = $true
         actionAuditEventCount = $auditEvents.Count
+        fixtureInitialBounds = $fixtureInitialBounds
+        negativeCoordinateFixture = ($fixtureInitialBounds.x -lt 0 -or $fixtureInitialBounds.y -lt 0)
     } | ConvertTo-Json -Depth 5
 } finally {
     if ($null -ne $mcpProcess -and -not $mcpProcess.HasExited) {

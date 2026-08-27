@@ -133,7 +133,7 @@ ActionResult
 
 - 已把 Windows runtime 源码、测试、smoke、上游许可证和第三方 notices 正式并入 `runtime/`；独立 runtime checkout 降级为临时上游同步区。
 - 已在 Windows runtime 增加 `WindowRef`、`list_windows`、`get_window`、`launch_app`、`activate_window`、`get_window_state`，保留原有 9 个 tools 与 `get_app_state` 兼容入口。
-- 已实机验证 DingTalk 精确窗口状态/截图、当前前台窗口激活后验证、多候选 `ambiguous_window` 与陈旧引用 `stale_window`。
+- 已使用真实 Qt 桌面客户端样本验证精确窗口状态/截图、当前前台窗口激活后验证、多候选 `ambiguous_window` 与陈旧引用 `stale_window`；样本名称不进入核心运行时策略。
 - 已在 DSH adapter 增加默认 `foreground-verified` 模式、可选 `background-best-effort`、启动权限配置、统一 runtime env 与 v2/v1 模型指导。
 - 已让所有 mutating tools 接受 WindowRef：元素/文本/按键要求最新 `observation_id`，坐标要求最新 `screenshot_id`；动作前精确激活/重验前台，动作后刷新同一窗口并使旧代次失效。
 - 已实现首版前台 `SendInput` 鼠标、拖拽、滚轮、Unicode 文本和按键路径，以及 `occluded_by_non_target` 拒绝；本地 WPF 无外发动作 smoke 全通过。
@@ -151,7 +151,7 @@ ActionResult
 - 已完成 M7 首个可靠性切片：DSH 注入 `action_id`／`idempotency_key`，运行时拒绝重复派发；MCP 标准取消通知可终止活动 PowerShell 调用并取消排队调用；多个 runtime 通过 Windows 命名互斥锁串行化前台输入。
 - 已完成 M7 持久化切片：每用户 JSONL 日志保存幂等键哈希与脱敏状态，使用命名互斥锁、同步落盘和原子压缩；原 runtime 进程崩溃后，悬挂动作被保守恢复为 `unknown` 且不会自动重放，并提供审计／状态／压缩 CLI。
 - 已增加统一可靠性 smoke 入口，采集显示器／负坐标／DPI 拓扑并串行运行 WGC 遮挡、模态恢复、动作后置条件、动作诊断和重复动作拒绝测试。
-- 下一切片：完成钉钉联系人搜索—中文输入—复核—发送前确认闭环、负坐标多屏夹具与 Electron／Qt／Office 质量矩阵；物理 Windows 11 与 arm64 仍需对应设备验收。
+- 下一切片：完成参数驱动的消息类应用“搜索—中文输入—复核—发送前确认”闭环、负坐标多屏夹具与 Electron／Qt／Office 质量矩阵；物理 Windows 11 与 arm64 仍需对应设备验收。
 
 ### M0：基线、工具链与回归夹具
 
@@ -165,11 +165,11 @@ ActionResult
 
 1. 固定当前 v0.5.0 行为测试，保留后台模式兼容性。
 2. 建立 Win32、WPF、Qt、Electron、文本编辑器、模态框、多窗口夹具。
-3. 增加 DingTalk、VS Code、记事本、资源管理器和 Office 类真实应用的手工 smoke 场景。
+3. 增加 Qt、Electron、文本编辑器、文件管理器和 Office 类真实应用的参数化 smoke 场景；具体产品名只存在于外部测试矩阵。
 4. 固定 Go、Node、pnpm 与 Windows SDK 版本；当前本机没有 Go，实施时使用工作区隔离工具链或 CI，不直接污染系统环境。
 5. 定义 trace 格式：窗口选择、观察 ID、输入路径、前台句柄、焦点元素、后置条件和耗时。
 
-退出门槛：现状失败能够稳定复现；钉钉搜索框用例必须先红。
+退出门槛：现状失败能够稳定复现；消息类 Qt 应用搜索框用例必须先红。
 
 ### M1：窗口身份与生命周期
 
@@ -223,7 +223,7 @@ ActionResult
 4. 暴露 `focused_element`、`selected_text`、`selected_elements`、`document_text`。
 5. 对 Qt/Electron 自绘边界允许视觉坐标路径，但必须绑定 screenshot ID。
 
-退出门槛：钉钉搜索框可自动聚焦并写入联系人；VS Code 编辑器、记事本和 Office 输入夹具全部通过；只填写，不发送。
+退出门槛：消息类 Qt 应用搜索框可自动聚焦并写入显式联系人；Electron 编辑器、文本编辑器和 Office 输入夹具全部通过；只填写，不发送。
 
 ### M5：动作协调器与恢复状态机
 
@@ -290,12 +290,12 @@ ActionResult
 
 ## 6. 验收场景
 
-### 钉钉主场景
+### 消息类应用通用场景
 
-1. 从多个窗口中唯一绑定钉钉主窗口。
+1. 从多个窗口中按调用方提供的应用/标题条件唯一绑定目标主窗口。
 2. 自动恢复并激活窗口。
 3. 定位搜索框，验证焦点进入 Edit 控件。
-4. 使用 `set_value` 或已验证焦点输入“郑佳辉”。
+4. 使用 `set_value` 或已验证焦点输入调用方显式提供的联系人，不内置任何真实姓名。
 5. 刷新后确认文本可见并展示正确搜索结果。
 6. 填写消息后停在发送前，触发确认；未确认不得发送。
 
@@ -324,7 +324,7 @@ ActionResult
 
 ### E2E
 
-- 钉钉、VS Code、记事本、资源管理器、Office。
+- Qt 消息应用、Electron 编辑器、文本编辑器、文件管理器、Office 兼容套件。
 - 每个版本至少跑 foreground、DPI、多窗口、模态和故障恢复组合。
 
 ### 可观测性
@@ -368,7 +368,7 @@ ActionResult
 
 ### Follow-ups
 
-M0 完成后再进入 M1；每个里程碑必须通过退出门槛才能合并到下一阶段。首个可用版本以钉钉搜索与输入成功、发送前确认成功为发布闸门。
+M0 完成后再进入 M1；每个里程碑必须通过退出门槛才能合并到下一阶段。首个可用版本以参数化消息场景的搜索与输入成功、发送前确认成功为发布闸门。
 
 ## 10. Definition of Done
 
@@ -376,7 +376,7 @@ M0 完成后再进入 M1；每个里程碑必须通过退出门槛才能合并�
 
 - 13 个窗口级工具契约完成且保留 v1 兼容。
 - 截图、UIA、真实输入、焦点验证和恢复闭环全部上线。
-- 钉钉、VS Code 与 GUI 技术栈矩阵达到量化门槛。
+- Qt、Electron 与 Office 等 GUI 技术栈矩阵达到量化门槛，不以单个产品的特殊处理作为通过条件。
 - 任何动作不再出现“工具成功但窗口/焦点未变化”的假成功。
 - 所有高风险最终动作均在工具端确认门之后。
 - 安装、升级、回退、校验和与许可证流程可复现。

@@ -19,8 +19,8 @@ func TestMain(m *testing.M) {
 }
 
 func TestToolDefinitionCount(t *testing.T) {
-	if got := len(toolDefinitions()); got != 14 {
-		t.Fatalf("toolDefinitions() count = %d, want 14 (13 window-level tools plus get_app_state compatibility adapter)", got)
+	if got := len(toolDefinitions()); got != 15 {
+		t.Fatalf("toolDefinitions() count = %d, want 15 (14 window-level tools plus get_app_state compatibility adapter)", got)
 	}
 }
 
@@ -897,10 +897,50 @@ func TestMCPInfoCommandPrintsCompiledProtocolAndTools(t *testing.T) {
 	for _, tool := range info.Tools {
 		names[tool.Name] = true
 	}
-	for _, required := range []string{"list_windows", "get_window", "activate_window", "get_window_state", "click", "type_text", "press_key", "set_value"} {
+	for _, required := range []string{"list_windows", "get_window", "activate_window", "get_window_state", "find_elements", "click", "type_text", "press_key", "set_value"} {
 		if !names[required] {
 			t.Fatalf("mcp-info missing required tool %q", required)
 		}
+	}
+}
+
+func TestFindElementsQueriesOnlyTheCurrentObservation(t *testing.T) {
+	service := newService()
+	window := windowRef{AppID: "SampleDesktopApp", PID: 42, HWND: "100", Generation: "42-100-1"}
+	service.rememberSnapshot(snapshotWindowKey(window), &appSnapshot{
+		App:           appDescriptor{Name: "SampleDesktopApp", PID: 42},
+		Window:        &window,
+		ObservationID: "observation-current",
+		Elements: []elementRecord{
+			{Index: 10, AutomationID: "title.search_edit", Name: "搜索", ControlType: "Edit", Actions: []string{"SetValue"}},
+			{Index: 20, AutomationID: "chat.textEdit", Name: "消息", LocalizedControlType: "编辑", Actions: []string{"SetValue", "SetFocus"}},
+			{Index: 30, AutomationID: "send", Name: "发送(S)", ControlType: "Button", Actions: []string{"Invoke"}},
+		},
+	})
+
+	result := service.findElements(window, "observation-current", "", "search_edit", "", "edit", "", "SetValue", nil)
+	if result.IsError {
+		t.Fatalf("find_elements failed: %#v", result)
+	}
+	var payload elementSearchResult
+	if err := json.Unmarshal([]byte(result.Content[0].Text), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.MatchCount != 1 || len(payload.Elements) != 1 || payload.Elements[0].Index != 10 {
+		t.Fatalf("find_elements payload = %#v", payload)
+	}
+
+	valueMatch := service.findElements(window, "observation-current", "", "", "消息", "", "", "", nil)
+	if valueMatch.IsError {
+		t.Fatalf("value selector failed: %#v", valueMatch)
+	}
+	stale := service.findElements(window, "observation-stale", "发送", "", "", "", "", "", nil)
+	if !stale.IsError || !strings.Contains(stale.Content[0].Text, "observation_id does not match") {
+		t.Fatalf("stale find_elements result = %#v", stale)
+	}
+	empty := service.findElements(window, "observation-current", "", "", "", "", "", "", nil)
+	if !empty.IsError || !strings.Contains(empty.Content[0].Text, "requires at least one selector") {
+		t.Fatalf("empty find_elements result = %#v", empty)
 	}
 }
 
@@ -1028,7 +1068,7 @@ func TestWindowsRuntimeTreeBudgetDefaultsMatchMacOS(t *testing.T) {
 
 func TestSnapshotRendersExactFocusedElementIdentity(t *testing.T) {
 	snapshot := &appSnapshot{
-		App: appDescriptor{Name: "DingTalk", PID: 42},
+		App: appDescriptor{Name: "SampleDesktopApp", PID: 42},
 		FocusedElement: &elementRecord{
 			Index:                17,
 			RuntimeID:            []int{42, 17},
@@ -1104,7 +1144,7 @@ func TestWindowsRuntimeUIAFocusAndSetValueAreVerified(t *testing.T) {
 
 func TestSnapshotRendersCaptureProvenance(t *testing.T) {
 	snapshot := &appSnapshot{
-		App: appDescriptor{Name: "DingTalk", PID: 42},
+		App: appDescriptor{Name: "SampleDesktopApp", PID: 42},
 		Capture: &captureDescriptor{
 			Method:               "windows-graphics-capture",
 			Width:                1200,
@@ -1132,14 +1172,108 @@ func TestWindowsRuntimeUsesPhysicalCoordinateMappingAndMinimizedRecovery(t *test
 		"GetEffectiveMonitorDpi",
 		`coordinateSpace = "physical-screen-pixels"`,
 		"function Convert-ScreenshotPoint",
+		"function Test-CoordinateMappingContract",
+		"coordinate_self_test",
+		"x = -1920",
+		"x = -2560",
 		"coordinate_out_of_bounds",
 		"stale_screenshot(window_bounds_changed",
 		"window_minimized_activate_window_required",
+		`$_.Exception.Message -like "stale_window*"`,
+		"New-ClosedWindowSnapshot $process $window",
 		"isMinimized = [OCUWin32]::IsIconic($hwnd)",
 	}
 	for _, marker := range markers {
 		if !strings.Contains(windowsRuntimeScript, marker) {
 			t.Fatalf("Windows DPI/minimized contract missing %q", marker)
+		}
+	}
+}
+
+func TestMessagingAcceptanceIsApplicationAgnosticAndPreservesDraft(t *testing.T) {
+	source, err := os.ReadFile("scripts/run-windows-messaging-smoke.ps1")
+	if err != nil {
+		t.Fatalf("read generic messaging smoke: %v", err)
+	}
+	text := string(source)
+	for _, marker := range []string{
+		`[Parameter(Mandatory = $true)]`,
+		`[ValidateNotNullOrEmpty()]`,
+		`[string]$AppName`,
+		`[string]$SearchAutomationId`,
+		`[string]$EditorAutomationId`,
+		`[string]$SendAutomationId`,
+		`$requiredSendConfirmation = "SEND:${AppName}:$ContactName"`,
+		"Restore-DraftSafely",
+		"Restore-SearchSafely",
+		`action_intent = @{ kind = "send"`,
+	} {
+		if !strings.Contains(text, marker) {
+			t.Fatalf("generic messaging acceptance contract missing %q", marker)
+		}
+	}
+	if strings.Contains(text, "DingTalk") || strings.Contains(text, "钉钉") || strings.Contains(text, "$ContactName = ([string][char]") || strings.Contains(text, "0x90D1") {
+		t.Fatal("messaging acceptance must not embed an application or personal contact")
+	}
+}
+
+func TestTextFallbackRequiresVerifiedTargetedClick(t *testing.T) {
+	for _, marker := range []string{
+		"function Set-ElementFocusByClickVerified",
+		"Send-ForegroundMouseClick $topHwnd",
+		"[Windows.Automation.AutomationElement]::FromPoint",
+		"[Windows.Automation.TreeWalker]::ControlViewWalker",
+		"Same-RuntimeId",
+		"[int]$focused.Current.ProcessId -eq $processId",
+		"$insideTarget",
+		`$focusMethod = "verified-physical-click"`,
+		"Assert-ForegroundWindow $hwnd $processId",
+		`Send-ForegroundKey $topHwnd "ctrl+a" $processId`,
+		`-and -not [OCUWin32]::IsWindow($hwnd)`,
+	} {
+		if !strings.Contains(windowsRuntimeScript, marker) {
+			t.Fatalf("verified focus fallback contract missing %q", marker)
+		}
+	}
+	if strings.Contains(windowsRuntimeScript, "$sameTargetProcess = $true") {
+		t.Fatal("focus fallback must not accept any focused element from the target process")
+	}
+}
+
+func TestWindowsApplicationQualityMatrixCoversRequiredFrameworks(t *testing.T) {
+	source, err := os.ReadFile("../../quality/windows-app-matrix.json")
+	if err != nil {
+		t.Fatalf("read Windows app matrix: %v", err)
+	}
+	var matrix struct {
+		Categories []struct {
+			ID         string `json:"id"`
+			Framework  string `json:"framework"`
+			Candidates []struct {
+				App string `json:"app"`
+			} `json:"candidates"`
+		} `json:"categories"`
+	}
+	if err := json.Unmarshal(source, &matrix); err != nil {
+		t.Fatalf("parse Windows app matrix: %v", err)
+	}
+	covered := map[string]bool{}
+	for _, category := range matrix.Categories {
+		covered[category.ID] = len(category.Candidates) > 0
+	}
+	for _, required := range []string{"qt", "electron", "office"} {
+		if !covered[required] {
+			t.Fatalf("Windows app matrix does not cover %q", required)
+		}
+	}
+
+	workflow, err := os.ReadFile("../../.github/workflows/windows-11-acceptance.yml")
+	if err != nil {
+		t.Fatalf("read Windows 11 workflow: %v", err)
+	}
+	for _, marker := range []string{"workflow_dispatch:", "self-hosted", "windows-11", "interactive", "-RequireWindows11", "run-windows-quality-matrix.ps1"} {
+		if !strings.Contains(string(workflow), marker) {
+			t.Fatalf("Windows 11 acceptance workflow missing %q", marker)
 		}
 	}
 }

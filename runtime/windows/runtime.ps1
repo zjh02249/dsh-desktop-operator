@@ -651,6 +651,42 @@ function Convert-ScreenshotPoint([double]$x, [double]$y, $windowBounds, $capture
     }
 }
 
+function Test-CoordinateMappingContract {
+    $negativeBounds = [pscustomobject]@{ x = -1920; y = -200; width = 1920; height = 1080 }
+    $nativeCapture = [pscustomobject]@{ width = 1920; height = 1080 }
+    $topLeft = Convert-ScreenshotPoint 0 0 $negativeBounds $nativeCapture "negative.topLeft"
+    $bottomRight = Convert-ScreenshotPoint 1919 1079 $negativeBounds $nativeCapture "negative.bottomRight"
+    $scaledBounds = [pscustomobject]@{ x = -2560; y = 144; width = 2560; height = 1440 }
+    $scaledCapture = [pscustomobject]@{ width = 1280; height = 720 }
+    $scaledCenter = Convert-ScreenshotPoint 640 360 $scaledBounds $scaledCapture "mixedDpi.center"
+    if ($topLeft.x -ne -1920 -or $topLeft.y -ne -200) {
+        throw "coordinate_self_test_failed(negative_top_left actual=$($topLeft | ConvertTo-Json -Compress))"
+    }
+    if ($bottomRight.x -ne -1 -or $bottomRight.y -ne 879) {
+        throw "coordinate_self_test_failed(negative_bottom_right actual=$($bottomRight | ConvertTo-Json -Compress))"
+    }
+    if ($scaledCenter.x -ne -1280 -or $scaledCenter.y -ne 864) {
+        throw "coordinate_self_test_failed(mixed_dpi_center actual=$($scaledCenter | ConvertTo-Json -Compress))"
+    }
+    $outOfBoundsRejected = $false
+    try {
+        [void](Convert-ScreenshotPoint -1 0 $negativeBounds $nativeCapture "negative.invalid")
+    } catch {
+        $outOfBoundsRejected = $_.Exception.Message -like "coordinate_out_of_bounds*"
+    }
+    if (-not $outOfBoundsRejected) {
+        throw "coordinate_self_test_failed(out_of_bounds_not_rejected)"
+    }
+    return [pscustomobject]@{
+        status = "passed"
+        coordinateSpace = "physical-screen-pixels"
+        negativeTopLeft = $topLeft
+        negativeBottomRight = $bottomRight
+        mixedDpiCenter = $scaledCenter
+        outOfBoundsRejected = $true
+    }
+}
+
 function Send-MouseClick([IntPtr]$hwnd, [int]$screenX, [int]$screenY, [string]$button, [int]$count) {
     $point = New-Object OCUWin32+POINT
     $point.X = $screenX
@@ -806,9 +842,16 @@ function Send-Key([IntPtr]$hwnd, [string]$key) {
     }
 }
 
-function Assert-ForegroundWindow([IntPtr]$hwnd) {
+function Assert-ForegroundWindow([IntPtr]$hwnd, [int]$allowedProcessId = 0) {
     $foreground = [OCUWin32]::GetForegroundWindow()
     if ($foreground -ne $hwnd) {
+        if ($allowedProcessId -gt 0 -and $foreground -ne [IntPtr]::Zero) {
+            $foregroundProcessId = [uint32]0
+            [void][OCUWin32]::GetWindowThreadProcessId($foreground, [ref]$foregroundProcessId)
+            if ([int]$foregroundProcessId -eq $allowedProcessId) {
+                return
+            }
+        }
         throw "foreground_not_acquired(target=$($hwnd.ToInt64()), actual=$($foreground.ToInt64()))"
     }
 }
@@ -851,7 +894,7 @@ function Send-ForegroundScroll([IntPtr]$hwnd, [int]$screenX, [int]$screenY, [str
 }
 
 function Send-ForegroundText([IntPtr]$hwnd, [int]$processId, [string]$text) {
-    Assert-ForegroundWindow $hwnd
+    Assert-ForegroundWindow $hwnd $processId
     try {
         $focused = [Windows.Automation.AutomationElement]::FocusedElement
         if ($null -eq $focused -or $focused.Current.ProcessId -ne $processId) {
@@ -864,8 +907,8 @@ function Send-ForegroundText([IntPtr]$hwnd, [int]$processId, [string]$text) {
     [OCUWin32]::SendUnicodeText($text)
 }
 
-function Send-ForegroundKey([IntPtr]$hwnd, [string]$key) {
-    Assert-ForegroundWindow $hwnd
+function Send-ForegroundKey([IntPtr]$hwnd, [string]$key, [int]$allowedProcessId = 0) {
+    Assert-ForegroundWindow $hwnd $allowedProcessId
     $parts = $key -split "\+"
     $main = $parts[$parts.Length - 1]
     $modifiers = New-Object System.Collections.Generic.List[uint16]
@@ -1753,6 +1796,68 @@ function Set-ElementFocusVerified($element) {
     return $false
 }
 
+function Test-HitElementMatchesTarget($target, [int]$screenX, [int]$screenY) {
+    try {
+        $point = [System.Windows.Point]::new([double]$screenX, [double]$screenY)
+        $candidate = [Windows.Automation.AutomationElement]::FromPoint($point)
+        $walker = [Windows.Automation.TreeWalker]::ControlViewWalker
+        for ($depth = 0; $depth -lt 16 -and $null -ne $candidate; $depth++) {
+            if (Same-RuntimeId @($candidate.GetRuntimeId()) @($target.GetRuntimeId())) {
+                return $true
+            }
+            $candidate = $walker.GetParent($candidate)
+        }
+    } catch {
+    }
+    return $false
+}
+
+function Set-ElementFocusByClickVerified($element, [int]$processId, [IntPtr]$topHwnd) {
+    if (-not (Test-EnvFlagEnabled "OPEN_COMPUTER_USE_WINDOWS_ALLOW_FOCUS_ACTIONS")) {
+        return $false
+    }
+    $targetFrame = Get-ElementFrame $element $null
+    if ($null -eq $targetFrame) {
+        return $false
+    }
+    $screenX = [int][math]::Round($targetFrame.x + ($targetFrame.width / 2))
+    $screenY = [int][math]::Round($targetFrame.y + ($targetFrame.height / 2))
+    if (-not (Test-HitElementMatchesTarget $element $screenX $screenY)) {
+        return $false
+    }
+    Send-ForegroundMouseClick $topHwnd $screenX $screenY "left" 1
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        try {
+            $focused = [Windows.Automation.AutomationElement]::FocusedElement
+            if ($null -ne $focused -and [int]$focused.Current.ProcessId -eq $processId) {
+                $focusedRect = $focused.Current.BoundingRectangle
+                if (-not $focusedRect.IsEmpty) {
+                    $focusedCenterX = $focusedRect.X + ($focusedRect.Width / 2)
+                    $focusedCenterY = $focusedRect.Y + ($focusedRect.Height / 2)
+                    $insideTarget = $focusedCenterX -ge $targetFrame.x -and
+                        $focusedCenterX -le ($targetFrame.x + $targetFrame.width) -and
+                        $focusedCenterY -ge $targetFrame.y -and
+                        $focusedCenterY -le ($targetFrame.y + $targetFrame.height)
+                    if ($insideTarget) {
+                        return $true
+                    }
+                }
+                # Some accessibility providers expose only the containing window
+                # after a click. Accept that degraded focus signal only because
+                # UI Automation hit-testing already proved the click point belongs
+                # to the requested element or one of its descendants. Exact value
+                # read-back is still required before the action can succeed.
+                if ($focused.Current.ControlType -eq [Windows.Automation.ControlType]::Window) {
+                    return $true
+                }
+            }
+        } catch {
+        }
+        Start-Sleep -Milliseconds 25
+    }
+    return $false
+}
+
 function Get-AllElements($root) {
     $items = New-Object System.Collections.Generic.List[object]
     $items.Add($root)
@@ -2038,16 +2143,22 @@ function Set-ElementValueVerified($element, $root, [int]$processId, [IntPtr]$top
         }
         throw "Cannot set a value for an element that is not settable"
     }
-    if (-not (Set-ElementFocusVerified $element)) {
+    $focusMethod = "UIAutomation"
+    $focusAcquired = Set-ElementFocusVerified $element
+    if (-not $focusAcquired) {
+        $focusAcquired = Set-ElementFocusByClickVerified $element $processId $topHwnd
+        $focusMethod = "verified-physical-click"
+    }
+    if (-not $focusAcquired) {
         throw "focus_not_acquired(element=$($operation.element.index))"
     }
 
-    Send-ForegroundKey $topHwnd "ctrl+a"
+    Send-ForegroundKey $topHwnd "ctrl+a" $processId
     Send-ForegroundText $topHwnd $processId $value
     for ($attempt = 0; $attempt -lt 12; $attempt++) {
         $observed = Read-ElementTextForVerification $element
         if ($observed.available -and $observed.value -ceq $value) {
-            return "SendInput"
+            return "SendInput:$focusMethod"
         }
         Start-Sleep -Milliseconds 25
     }
@@ -2089,6 +2200,8 @@ try {
         $response = [pscustomobject]@{ ok = $true; snapshot = (Build-Snapshot "" (Resolve-TextLimit $operation.text_limit) ([int]$operation.max_tree_nodes) ([int]$operation.max_tree_depth) $operation.window) }
     } elseif ($operation.tool -eq "get_app_state") {
         $response = [pscustomobject]@{ ok = $true; snapshot = (Build-Snapshot $operation.app (Resolve-TextLimit $operation.text_limit) ([int]$operation.max_tree_nodes) ([int]$operation.max_tree_depth)) }
+    } elseif ($operation.tool -eq "coordinate_self_test") {
+        $response = [pscustomobject]@{ ok = $true; text = ((Test-CoordinateMappingContract) | ConvertTo-Json -Compress -Depth 6) }
     } else {
         $context = Resolve-ActionContext $operation
         $process = $context.process
@@ -2206,7 +2319,15 @@ try {
 
         Start-Sleep -Milliseconds 120
         $snapshot = if ([OCUWin32]::IsWindow($hwnd)) {
-            Build-Snapshot "" (Resolve-TextLimit $operation.text_limit) ([int]$operation.max_tree_nodes) ([int]$operation.max_tree_depth) $window
+            try {
+                Build-Snapshot "" (Resolve-TextLimit $operation.text_limit) ([int]$operation.max_tree_nodes) ([int]$operation.max_tree_depth) $window
+            } catch {
+                if (($_.Exception.Message -like "stale_window*" -or $_.Exception.Message -like "window_not_found*") -and -not [OCUWin32]::IsWindow($hwnd)) {
+                    New-ClosedWindowSnapshot $process $window
+                } else {
+                    throw
+                }
+            }
         } else {
             New-ClosedWindowSnapshot $process $window
         }

@@ -116,6 +116,22 @@ if (-not $DisplayOnly) {
         $result | Add-Member -NotePropertyName iteration -NotePropertyValue $iteration
         $results += $result
     }
+
+    $negativeDisplay = $displays | Where-Object { $_.bounds.x -lt 0 -or $_.bounds.y -lt 0 } | Select-Object -First 1
+    if ($null -ne $negativeDisplay) {
+        $negativeLeft = $negativeDisplay.bounds.x + [math]::Min(80, [math]::Max(0, $negativeDisplay.bounds.width - 520))
+        $negativeTop = $negativeDisplay.bounds.y + [math]::Min(80, [math]::Max(0, $negativeDisplay.bounds.height - 320))
+        $negativeResult = Invoke-Smoke "run-windows-action-smoke.ps1" @{
+            RuntimePath = $RuntimePath
+            FixtureLeft = $negativeLeft
+            FixtureTop = $negativeTop
+        }
+        $negativeResult | Add-Member -NotePropertyName coverage -NotePropertyValue "negative-coordinate-display"
+        if (-not $negativeResult.result.negativeCoordinateFixture) {
+            throw "Negative-coordinate fixture did not report a negative physical-screen origin."
+        }
+        $results += $negativeResult
+    }
 }
 
 if (-not $DisplayOnly -and -not [string]::IsNullOrWhiteSpace($RealApp)) {
@@ -144,6 +160,7 @@ $hasNegativeCoordinates = @($displays | Where-Object { $_.bounds.x -lt 0 -or $_.
         hasNegativeCoordinates = $hasNegativeCoordinates
         observedScalePercents = $scales
         mixedDpiObserved = $scales.Count -gt 1
+        physicalNegativeCoordinateActionVerified = @($results | Where-Object { $_.coverage -eq "negative-coordinate-display" }).Count -gt 0
         displays = $displays
     }
     deterministicSuites = $results

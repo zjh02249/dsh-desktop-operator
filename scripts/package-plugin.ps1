@@ -106,23 +106,45 @@ try {
         $startInfo.RedirectStandardOutput = $true
         $startInfo.RedirectStandardError = $true
         $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+        $startInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
         $mcpProcess = New-Object System.Diagnostics.Process
         $mcpProcess.StartInfo = $startInfo
         if (-not $mcpProcess.Start()) { throw "Could not start the packaged MCP runtime." }
+        $stderrTask = $mcpProcess.StandardError.ReadToEndAsync()
 
-        $requests = @(
-            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"package-verifier","version":"1"}}}',
-            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-        )
-        $responses = @()
-        foreach ($request in $requests) {
+        function Invoke-PackagedMcpRequest([string]$request, [int]$expectedId) {
             $mcpProcess.StandardInput.WriteLine($request)
             $mcpProcess.StandardInput.Flush()
-            $readTask = $mcpProcess.StandardOutput.ReadLineAsync()
-            if (-not $readTask.Wait(10000)) { throw "Packaged MCP runtime timed out during archive verification." }
-            $responses += $readTask.Result | ConvertFrom-Json
+            for ($attempt = 1; $attempt -le 20; $attempt++) {
+                $readTask = $mcpProcess.StandardOutput.ReadLineAsync()
+                if (-not $readTask.Wait(30000)) {
+                    throw "Packaged MCP runtime timed out waiting for JSON-RPC response id $expectedId."
+                }
+                if ($null -eq $readTask.Result) {
+                    $stderr = if ($stderrTask.IsCompleted) { $stderrTask.Result.Trim() } else { "" }
+                    throw "Packaged MCP runtime closed stdout before JSON-RPC response id $expectedId. stderr: $stderr"
+                }
+                $response = $readTask.Result | ConvertFrom-Json
+                if ($response.id -ne $expectedId) { continue }
+                if ($null -ne $response.error) {
+                    throw "Packaged MCP runtime returned an error for JSON-RPC id $expectedId`: $($response.error | ConvertTo-Json -Compress)"
+                }
+                return $response
+            }
+            throw "Packaged MCP runtime did not return JSON-RPC response id $expectedId."
         }
-        $toolNames = @($responses[1].result.tools | ForEach-Object { $_.name })
+
+        $initializeRequest = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"package-verifier","version":"1"}}}'
+        $initializedNotification = '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}'
+        $toolsRequest = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+        $initializeResponse = Invoke-PackagedMcpRequest $initializeRequest 1
+        if ($initializeResponse.result.protocolVersion -ne "2025-03-26") {
+            throw "Packaged MCP runtime returned unexpected protocol version '$($initializeResponse.result.protocolVersion)'."
+        }
+        $mcpProcess.StandardInput.WriteLine($initializedNotification)
+        $mcpProcess.StandardInput.Flush()
+        $toolsResponse = Invoke-PackagedMcpRequest $toolsRequest 2
+        $toolNames = @($toolsResponse.result.tools | ForEach-Object { $_.name })
         $requiredTools = @("list_windows", "get_window", "activate_window", "get_window_state", "click", "type_text", "press_key", "set_value")
         $missingTools = @($requiredTools | Where-Object { $_ -notin $toolNames })
         if ($missingTools.Count -gt 0) {

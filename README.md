@@ -2,7 +2,7 @@
 
 > 🌐 **语言切换 / Language:** **简体中文** | [English](README.en.md)
 
-[![Version](https://img.shields.io/badge/version-0.8.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.9.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20arm64-0078d4)](#系统兼容性)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -10,7 +10,7 @@
 
 项目目标不是简单模拟鼠标键盘，而是逐步复刻 Codex Computer Use 的关键工程能力：精确选择窗口、观察界面、优先使用无障碍元素、执行动作、验证结果、处理模态窗口、在敏感动作前确认，并让用户清楚看到电脑正在被控制。
 
-> 当前开发版本：`0.9.0`；最新公开 Release：`0.8.0`。项目 Windows-first，可供开发者试用。已在 Windows 10 x64 与 DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6` 上完成真实桌面验证；尚不应视为跨系统、跨应用都达到生产级稳定性的最终版本。
+> 当前开发版本和最新公开 Release：`0.9.0`。项目 Windows-first，可供开发者试用。已在 Windows 10 x64 与 DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6` 上完成真实桌面验证；尚不应视为跨系统、跨应用都达到生产级稳定性的最终版本。
 
 ### 项目关系与归属
 
@@ -28,29 +28,29 @@
 dsh-desktop-operator-<版本号>.tgz
 ```
 
-例如 `0.8.0` 对应：
+例如 `0.9.0` 对应：
 
 ```text
-dsh-desktop-operator-0.8.0.tgz
+dsh-desktop-operator-0.9.0.tgz
 ```
 
 如果你刚从源码构建，安装包位于：
 
 ```text
-artifacts/package/dsh-desktop-operator-0.8.0.tgz
+artifacts/package/dsh-desktop-operator-0.9.0.tgz
 ```
 
 ### 2. 安装到 DSH Web Profile
 
 ```powershell
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
 ```
 
 如果终端找不到 `dsh`，使用 DeepSeek Harness 自带的 DSH CLI：
 
 ```powershell
 $DshCli = "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js"
-node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
+node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
 ```
 
 ### 3. 挂载到 Agent Preset
@@ -103,7 +103,7 @@ $PluginRoot = "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-desktop-opera
 
 ```powershell
 dsh plugin --profile web remove '@valkia/dsh-plugin-computer-use'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
 ```
 
 ### 升级已有 `dsh-desktop-operator` 安装
@@ -112,7 +112,7 @@ DSH/pnpm 可能复用同名本地包缓存。升级时建议先移除旧包，�
 
 ```powershell
 dsh plugin --profile web remove 'dsh-desktop-operator'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
 ```
 
 随后重启 DeepSeek Harness，并使用新会话重新验证版本。
@@ -356,15 +356,15 @@ Release 构建不会声称替代真实应用验收。涉及发送消息、删除
 ## 发布版本
 
 - 版本历史见 [CHANGELOG.md](CHANGELOG.md)。
-- 推送 `v*` 标签后，GitHub Actions 会在 Windows runner 上重新测试和打包。
+- `main` 中的 `package.json` 首次出现新版本号时，GitHub Actions 会在 Windows runner 上重新测试和打包；全部通过后自动创建对应 `v*` 标签和 Release。
+- 仍可手动推送 `v*` 标签触发同一套发布流程；标签版本必须与 `package.json` 一致。
 - Release 自动附带 `.tgz`、两个架构的 runtime、manifest 和 SHA-256 校验文件。
 - 主分支的 backfill job 会为历史标签补建缺失的 GitHub Release 页面。
 
-维护者发布示例：
+维护者只需提交版本号、CHANGELOG 和文档后推送 `main`：
 
 ```powershell
-git tag -a v0.8.0 -m "v0.8.0"
-git push origin main --follow-tags
+git push origin main
 ```
 
 ## 目录结构

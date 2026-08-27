@@ -2,7 +2,7 @@
 
 > 🌐 **Language / 语言:** [简体中文](README.md) | **English**
 
-[![Version](https://img.shields.io/badge/version-0.8.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.9.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20arm64-0078d4)](#platform-compatibility)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -10,7 +10,7 @@
 
 The goal is more than basic mouse and keyboard emulation. This project is progressively implementing the engineering foundations behind a Codex-like Computer Use experience: exact window selection, UI observation, accessibility-first targeting, action execution, post-action verification, modal recovery, confirmation before consequential actions, and an obvious visual indication while the computer is being controlled.
 
-> Current development version: `0.9.0`; latest public Release: `0.8.0`. The project is Windows-first and suitable for developer evaluation. Real desktop tests have passed on Windows 10 x64 with DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6`. This is not yet a production-grade promise across every OS and desktop application.
+> Current development version and latest public Release: `0.9.0`. The project is Windows-first and suitable for developer evaluation. Real desktop tests have passed on Windows 10 x64 with DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6`. This is not yet a production-grade promise across every OS and desktop application.
 
 ### Project relationship and attribution
 
@@ -28,29 +28,29 @@ Download the latest package from [GitHub Releases](https://github.com/zjh02249/d
 dsh-desktop-operator-<version>.tgz
 ```
 
-For example, release `0.8.0` contains:
+For example, release `0.9.0` contains:
 
 ```text
-dsh-desktop-operator-0.8.0.tgz
+dsh-desktop-operator-0.9.0.tgz
 ```
 
 When building from source, the same archive is generated under:
 
 ```text
-artifacts/package/dsh-desktop-operator-0.8.0.tgz
+artifacts/package/dsh-desktop-operator-0.9.0.tgz
 ```
 
 ### 2. Install it into the DSH Web Profile
 
 ```powershell
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
 ```
 
 If `dsh` is not on `PATH`, call the CLI bundled with DeepSeek Harness:
 
 ```powershell
 $DshCli = "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js"
-node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
+node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
 ```
 
 ### 3. Mount it in an Agent Preset
@@ -103,7 +103,7 @@ If `@valkia/dsh-plugin-computer-use` was installed previously, remove the old ID
 
 ```powershell
 dsh plugin --profile web remove '@valkia/dsh-plugin-computer-use'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
 ```
 
 ### Upgrade an existing `dsh-desktop-operator` installation
@@ -112,7 +112,7 @@ DSH/pnpm may reuse a cached local archive with the same filename. Remove the ins
 
 ```powershell
 dsh plugin --profile web remove 'dsh-desktop-operator'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
 ```
 
 Restart DeepSeek Harness, open a new session, and verify both versions again.
@@ -358,15 +358,15 @@ A Release build is not a substitute for acceptance testing against a real third-
 ## Releases
 
 - See [CHANGELOG.md](CHANGELOG.md) for version history.
-- A pushed `v*` tag triggers a fresh test and Windows x64/arm64 build on GitHub Actions.
+- When `package.json` first contains a new version on `main`, GitHub Actions runs a fresh test and Windows x64/arm64 build, then creates the matching `v*` tag and Release only after those checks pass.
+- A manually pushed `v*` tag can still trigger the same release path; the tag must match `package.json`.
 - The Release receives the plugin `.tgz`, standalone runtimes, manifest, and SHA-256 checksums.
 - The main-branch backfill job creates missing GitHub Release pages for historical version tags.
 
-Maintainer example:
+The maintainer only commits the version, CHANGELOG, and docs before pushing `main`:
 
 ```powershell
-git tag -a v0.8.0 -m "v0.8.0"
-git push origin main --follow-tags
+git push origin main
 ```
 
 ## Repository layout

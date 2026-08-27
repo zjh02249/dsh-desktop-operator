@@ -79,7 +79,7 @@
 - 提供一键测试、x64/arm64 构建、打包和归档完整性校验。
 - 建立长期 Codex Computer Use 能力对齐路线。
 
-[0.9.0]: https://github.com/zjh02249/dsh-desktop-operator/compare/v0.8.0...main
+[0.9.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.9.0
 [0.8.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.8.0
 [0.7.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.7.0
 [0.6.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.6.0

@@ -115,25 +115,50 @@ try {
         $mcpProcess = New-Object System.Diagnostics.Process
         $mcpProcess.StartInfo = $startInfo
         $mcpStarted = $false
-        $rawOutput = ""
+        $responses = @()
+        $terminatedAfterVerification = $false
         try {
             if (-not $mcpProcess.Start()) { throw "Could not start the packaged MCP runtime." }
             $mcpStarted = $true
-            $stdoutTask = $mcpProcess.StandardOutput.ReadToEndAsync()
             $stderrTask = $mcpProcess.StandardError.ReadToEndAsync()
             $mcpProcess.StandardInput.Write(($mcpRequests -join "`n") + "`n")
             $mcpProcess.StandardInput.Close()
-            if (-not $mcpProcess.WaitForExit(30000)) {
+
+            $deadline = [DateTime]::UtcNow.AddSeconds(30)
+            while ($true) {
+                $remainingMilliseconds = [Math]::Max(1, [int]($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+                if ($remainingMilliseconds -le 1) {
+                    throw "Packaged MCP runtime did not return the required JSON-RPC responses within 30 seconds."
+                }
+                $lineTask = $mcpProcess.StandardOutput.ReadLineAsync()
+                if (-not $lineTask.Wait($remainingMilliseconds)) {
+                    throw "Packaged MCP runtime did not return the required JSON-RPC responses within 30 seconds."
+                }
+                $line = $lineTask.Result
+                if ($null -eq $line) {
+                    throw "Packaged MCP runtime closed stdout before returning the required JSON-RPC responses."
+                }
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                try {
+                    $responses += $line | ConvertFrom-Json -ErrorAction Stop
+                } catch {
+                    throw "Packaged MCP runtime returned invalid JSON: $line"
+                }
+                $initializeResponse = $responses | Where-Object { $_.id -eq 1 } | Select-Object -First 1
+                $toolsResponse = $responses | Where-Object { $_.id -eq 2 } | Select-Object -First 1
+                if ($null -ne $initializeResponse -and $null -ne $toolsResponse) { break }
+            }
+
+            if (-not $mcpProcess.HasExited) {
                 $mcpProcess.Kill()
+                $terminatedAfterVerification = $true
                 $null = $mcpProcess.WaitForExit(5000)
-                throw "Packaged MCP runtime did not exit after stdin closed."
             }
-            if (-not $stdoutTask.Wait(5000) -or -not $stderrTask.Wait(5000)) {
-                throw "Packaged MCP runtime output streams did not close after process exit."
+            if (-not $stderrTask.Wait(5000)) {
+                throw "Packaged MCP runtime stderr did not close after verification."
             }
-            $rawOutput = $stdoutTask.Result
             $stderr = $stderrTask.Result.Trim()
-            if ($mcpProcess.ExitCode -ne 0) {
+            if (-not $terminatedAfterVerification -and $mcpProcess.ExitCode -ne 0) {
                 throw "Packaged MCP runtime exited with code $($mcpProcess.ExitCode). stderr: $stderr"
             }
         } finally {
@@ -143,10 +168,6 @@ try {
             }
             $mcpProcess.Dispose()
         }
-        $rawResponses = $rawOutput -split "`r?`n"
-        $responses = @($rawResponses |
-            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
-            ForEach-Object { $_ | ConvertFrom-Json })
         $initializeResponse = $responses | Where-Object { $_.id -eq 1 } | Select-Object -First 1
         $toolsResponse = $responses | Where-Object { $_.id -eq 2 } | Select-Object -First 1
         if ($null -eq $initializeResponse -or $null -eq $toolsResponse) {

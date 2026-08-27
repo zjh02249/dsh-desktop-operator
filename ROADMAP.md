@@ -148,7 +148,9 @@ ActionResult
 - 已实现模态恢复安全边界：快照返回 `ModalWindows`，已被模态窗口禁用的 owner 会以 `modal_window_required` 拒绝激活并返回精确候选；WinForms owner/modal 实机 smoke 已通过。
 - 已把 `expected_postcondition` 扩展为焦点、值、文本、前台窗口、截图变化和 `window_closed`，并支持最多 8 个叶子条件的 `all`/`any` 组合；WPF satisfied/unknown 与 WinForms modal close 实机 smoke 均通过。
 - 已完成 M6 的高风险最终动作门禁：七个 mutating tools 强制声明 `action_intent`，DSH adapter 对发送、提交、发布、删除、购买、批准、上传、权限、敏感数据暴露和安装执行逐次确认／拒绝／显式允许策略；运行时对明显高风险控件增加低风险意图防绕过检查。
-- 下一切片：完整多屏／负坐标／其他 DPI 机器矩阵、真实应用安全矩阵、窗口级取消与动作锁、正式打包签名。
+- 已完成 M7 首个可靠性切片：DSH 注入 `action_id`／`idempotency_key`，运行时拒绝重复派发；MCP 标准取消通知可终止活动 PowerShell 调用并取消排队调用；多个 runtime 通过 Windows 命名互斥锁串行化前台输入。
+- 已增加统一可靠性 smoke 入口，采集显示器／负坐标／DPI 拓扑并串行运行 WGC 遮挡、模态恢复、动作后置条件、动作诊断和重复动作拒绝测试。
+- 下一切片：在更多物理机器上完成多屏／负坐标／混合 DPI 矩阵、真实应用安全矩阵、跨 runtime 崩溃持久化幂等日志和正式打包签名。
 
 ### M0：基线、工具链与回归夹具
 

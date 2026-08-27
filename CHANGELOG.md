@@ -2,6 +2,21 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。在 `1.0.0` 之前，DSH 预发布 API 或 Computer Use 工具协议的变化仍可能带来不兼容调整。
 
+## [0.9.0] - 2026-08-27
+
+### 新增
+
+- 为有副作用动作增加 `action_id`、`idempotency_key`、动作耗时诊断与重复派发拒绝。
+- MCP server 支持标准 `notifications/cancelled`，可以取消排队调用并终止活动 PowerShell 动作。
+- Windows runtime 使用命名互斥锁，在多个 DSH runtime 进程之间串行化前台激活和真实输入。
+- 新增统一可靠性 smoke 入口，采集显示器、负坐标与 DPI 拓扑，并运行遮挡捕获、模态恢复和动作闭环。
+
+### 安全与行为
+
+- DSH adapter 默认使用 tool call id 填充动作 ID 和幂等键，同时保留调用方显式提供的逻辑操作键。
+- 相同幂等键一旦进入原生动作派发就会失败关闭，要求重新观察后再决定下一步。
+- runtime 结束、MCP 取消或调用超时时，活动桌面动作返回未验证语义，不会被当成安全成功。
+
 ## [0.8.0] - 2026-08-27
 
 ### 新增
@@ -64,6 +79,7 @@
 - 提供一键测试、x64/arm64 构建、打包和归档完整性校验。
 - 建立长期 Codex Computer Use 能力对齐路线。
 
+[0.9.0]: https://github.com/zjh02249/dsh-desktop-operator/compare/v0.8.0...main
 [0.8.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.8.0
 [0.7.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.7.0
 [0.6.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.6.0

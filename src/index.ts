@@ -66,6 +66,8 @@ export interface Config {
   allowAppLaunch?: boolean
   /** Show a click-through desktop banner and cursor halo while Computer Use controls Windows. */
   visualIndicator?: boolean
+  /** Maximum wait for the cross-process foreground-input lock in milliseconds. */
+  actionLockTimeoutMs?: number
   /** Per-MCP-tool deadline in milliseconds. */
   toolCallTimeoutMs?: number
   /** Whether initial MCP launch or tool discovery failure rejects plugin activation. */
@@ -100,6 +102,7 @@ export const Config: z<Config> = z.object({
   interactionMode: z.union(['foreground-verified', 'background-best-effort'] as const).default('foreground-verified'),
   allowAppLaunch: z.boolean().default(false),
   visualIndicator: z.boolean().default(true),
+  actionLockTimeoutMs: z.number().step(1).min(1).max(120_000).default(5_000),
   toolCallTimeoutMs: z.number().min(1).default(120_000),
   failOnStartupError: z.boolean().default(true),
   reconnect: Reconnect,
@@ -173,7 +176,7 @@ export function resolveRuntimeLaunch(
  * @param config - plugin config carrying explicit env plus high-level runtime switches.
  * @returns env object suitable for both MCP launch and one-shot cleanup helpers.
  */
-export function resolveRuntimeEnv(config: Pick<Config, 'env' | 'interactionMode' | 'allowAppLaunch' | 'visualIndicator'>): Record<string, string> {
+export function resolveRuntimeEnv(config: Pick<Config, 'env' | 'interactionMode' | 'allowAppLaunch' | 'visualIndicator' | 'actionLockTimeoutMs'>): Record<string, string> {
   const interactionMode = config.interactionMode ?? 'foreground-verified'
   return {
     ...(config.env ?? {}),
@@ -182,6 +185,7 @@ export function resolveRuntimeEnv(config: Pick<Config, 'env' | 'interactionMode'
     OPEN_COMPUTER_USE_WINDOWS_ALLOW_APP_LAUNCH: config.allowAppLaunch ? '1' : '0',
     OPEN_COMPUTER_USE_WINDOWS_INTERACTION_MODE: interactionMode,
     OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR: config.visualIndicator === false ? '0' : '1',
+    OPEN_COMPUTER_USE_WINDOWS_ACTION_LOCK_TIMEOUT_MS: String(config.actionLockTimeoutMs ?? 5_000),
   }
 }
 
@@ -195,6 +199,7 @@ export const COMPUTER_USE_PROMPT = [
   'Take one action at a time and refresh state after every action. Prefer current semantic targets over coordinates. When an editable element exposes `SetFocus`, call `perform_secondary_action`, require the returned `FocusedElement` to identify the same element, then call `set_value`.',
   'Use `expected_postcondition` when an action has an observable outcome. Treat `ActionStatus: unknown` as unverified: re-observe, and never blindly retry a side-effecting action.',
   'Every mutating action requires `action_intent` with an accurate `kind` and concise user-readable `summary`; never relabel send, submit, publish, delete, purchase, approve, upload, access changes, sensitive-data exposure, or installation as a lower-risk action to bypass confirmation.',
+  'The adapter assigns every mutating call an `action_id` and `idempotency_key`. Reusing an idempotency key is rejected after dispatch; after an unknown result, re-observe instead of issuing the same action again.',
   'Never reuse stale indexes or state IDs, and verify the target window still has focus before typing, `type_text`, `set_value`, or `press_key` text entry.',
   'Obtain the user’s confirmation immediately before the final high-risk action such as sending, deleting, purchasing, approving, uploading, changing access, or exposing sensitive data.',
 ].join(' ')
@@ -208,11 +213,31 @@ export function isComputerUseTool(toolName: string): boolean {
   return toolName.startsWith(COMPUTER_USE_TOOL_PREFIX)
 }
 
+const COMPUTER_USE_ACTION_TOOLS = new Set(['click', 'drag', 'perform_secondary_action', 'press_key', 'scroll', 'set_value', 'type_text'])
+
+function computerUseRawToolName(toolName: string): string {
+  return toolName.startsWith(COMPUTER_USE_TOOL_PREFIX) ? toolName.slice(COMPUTER_USE_TOOL_PREFIX.length) : ''
+}
+
+function isComputerUseActionTool(toolName: string): boolean {
+  return COMPUTER_USE_ACTION_TOOLS.has(computerUseRawToolName(toolName))
+}
+
+/** Add transport-stable identity without replacing an explicit logical operation key. */
+function ensureComputerUseActionIdentity(exec: ToolExecution): void {
+  if (!isComputerUseActionTool(exec.name) || typeof exec.arguments !== 'object' || exec.arguments === null || Array.isArray(exec.arguments)) return
+  const args = exec.arguments as Record<string, unknown>
+  const explicitActionID = typeof args.action_id === 'string' ? args.action_id.trim() : ''
+  const actionID = explicitActionID || exec.callId
+  args.action_id = actionID
+  if (typeof args.idempotency_key !== 'string' || args.idempotency_key.trim() === '') {
+    args.idempotency_key = actionID
+  }
+}
+
 /** Classify a Computer Use call from its required semantic action declaration. */
 export function classifyComputerUseAction(toolName: string, args: unknown): ComputerUseActionRisk {
-  const actionTools = new Set(['click', 'drag', 'perform_secondary_action', 'press_key', 'scroll', 'set_value', 'type_text'])
-  const tool = toolName.startsWith(COMPUTER_USE_TOOL_PREFIX) ? toolName.slice(COMPUTER_USE_TOOL_PREFIX.length) : ''
-  if (!actionTools.has(tool)) return { level: 'none' }
+  if (!isComputerUseActionTool(toolName)) return { level: 'none' }
   if (typeof args !== 'object' || args === null || Array.isArray(args)) return { level: 'unclassified' }
 
   const intent = (args as Record<string, unknown>).action_intent
@@ -291,6 +316,7 @@ function installAccessGate(
     }
     const existingOwnershipDenial = ownershipDenial(agent)
     if (existingOwnershipDenial !== undefined) return existingOwnershipDenial
+    ensureComputerUseActionIdentity(exec)
     const risk = classifyComputerUseAction(exec.name, exec.arguments)
     if (risk.level === 'unclassified') {
       return { kind: 'deny', reason: 'Computer Use action tools require a valid action_intent with kind and summary.' }
@@ -407,6 +433,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const interactionMode = config.interactionMode ?? 'foreground-verified'
   const allowAppLaunch = config.allowAppLaunch ?? false
   const visualIndicator = config.visualIndicator ?? true
+  const actionLockTimeoutMs = config.actionLockTimeoutMs ?? 5_000
   const toolCallTimeoutMs = config.toolCallTimeoutMs ?? 120_000
   const failOnStartupError = config.failOnStartupError ?? true
   const cleanupOnTurnEnd = config.cleanupOnTurnEnd ?? true
@@ -420,6 +447,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     interactionMode,
     allowAppLaunch,
     visualIndicator,
+    actionLockTimeoutMs,
   })
   const usedAgents = new WeakSet<Agent>()
 

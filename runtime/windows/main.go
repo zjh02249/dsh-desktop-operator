@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -14,10 +15,11 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-var version = "0.8.0"
+var version = "0.9.0"
 
 const (
 	mcpProtocolVersion = "2025-03-26"
@@ -152,6 +154,8 @@ type appSnapshot struct {
 	ObservationID       string               `json:"observationId,omitempty"`
 	ScreenshotID        string               `json:"screenshotId,omitempty"`
 	ActionStatus        string               `json:"actionStatus,omitempty"`
+	ActionID            string               `json:"actionId,omitempty"`
+	ActionDurationMS    int64                `json:"actionDurationMs,omitempty"`
 	Postcondition       *postconditionResult `json:"postcondition,omitempty"`
 	WindowClosed        bool                 `json:"windowClosed,omitempty"`
 	WindowTitle         string               `json:"windowTitle,omitempty"`
@@ -198,6 +202,12 @@ func (s *appSnapshot) renderedText() string {
 	}
 	if s.ActionStatus != "" {
 		lines = append(lines, fmt.Sprintf("ActionStatus: %s", s.ActionStatus))
+	}
+	if s.ActionID != "" {
+		lines = append(lines, fmt.Sprintf("ActionID: %s", s.ActionID))
+	}
+	if s.ActionDurationMS > 0 {
+		lines = append(lines, fmt.Sprintf("ActionDurationMs: %d", s.ActionDurationMS))
 	}
 	if s.WindowClosed {
 		lines = append(lines, "WindowClosed: true")
@@ -301,6 +311,9 @@ type psRequest struct {
 	WindowBounds           *frame                 `json:"windowBounds,omitempty"`
 	Capture                *captureDescriptor     `json:"capture,omitempty"`
 	ExpectedPostcondition  *expectedPostcondition `json:"expected_postcondition,omitempty"`
+	ActionIntent           actionIntent           `json:"action_intent,omitempty"`
+	ActionID               string                 `json:"action_id,omitempty"`
+	IdempotencyKey         string                 `json:"idempotency_key,omitempty"`
 	BeforeScreenshotSHA256 string                 `json:"before_screenshot_sha256,omitempty"`
 	TextLimit              any                    `json:"text_limit,omitempty"`
 	MaxTreeNodes           int                    `json:"max_tree_nodes,omitempty"`
@@ -331,8 +344,17 @@ type psResponse struct {
 
 type service struct {
 	snapshots     map[string]*appSnapshot
-	runPS         func(psRequest) (*psResponse, error)
+	runPS         func(context.Context, psRequest) (*psResponse, error)
 	showIndicator func(psRequest)
+	callSlot      chan struct{}
+	callContext   context.Context
+	actionsMu     sync.Mutex
+	actions       map[string]actionRecord
+}
+
+type actionRecord struct {
+	ActionID  string
+	StartedAt time.Time
 }
 
 type controlIndicatorState struct {
@@ -351,6 +373,8 @@ type actionTarget struct {
 	ObservationID         string
 	ScreenshotID          string
 	ActionIntent          actionIntent
+	ActionID              string
+	IdempotencyKey        string
 	ExpectedPostcondition *expectedPostcondition
 }
 
@@ -370,21 +394,53 @@ type resolvedActionTarget struct {
 }
 
 func newService() *service {
-	return &service{
+	service := &service{
 		snapshots:     map[string]*appSnapshot{},
 		runPS:         runPowerShell,
 		showIndicator: showControlIndicator,
+		callSlot:      make(chan struct{}, 1),
+		callContext:   context.Background(),
+		actions:       map[string]actionRecord{},
 	}
+	service.callSlot <- struct{}{}
+	return service
 }
 
 func (s *service) executePS(request psRequest) (*psResponse, error) {
 	if isControlTool(request.Tool) && s.showIndicator != nil {
 		s.showIndicator(request)
 	}
-	return s.runPS(request)
+	ctx := s.callContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return s.runPS(ctx, request)
 }
 
 func (s *service) callTool(name string, args map[string]any) toolCallResult {
+	return s.callToolContext(context.Background(), name, args)
+}
+
+func (s *service) callToolContext(ctx context.Context, name string, args map[string]any) toolCallResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return textResult("cancelled_before_dispatch: "+ctx.Err().Error(), true)
+	case <-s.callSlot:
+	}
+	defer func() { s.callSlot <- struct{}{} }()
+	if err := ctx.Err(); err != nil {
+		return textResult("cancelled_before_dispatch: "+err.Error(), true)
+	}
+	previousContext := s.callContext
+	s.callContext = ctx
+	defer func() { s.callContext = previousContext }()
+	return s.dispatchTool(name, args)
+}
+
+func (s *service) dispatchTool(name string, args map[string]any) toolCallResult {
 	switch name {
 	case "list_apps":
 		return s.listApps()
@@ -672,6 +728,9 @@ func (s *service) click(target actionTarget, elementIndex string, x, y *float64,
 		ScreenshotID:          target.ScreenshotID,
 		WindowBounds:          snapshot.WindowBounds,
 		Capture:               snapshot.Capture,
+		ActionIntent:          target.ActionIntent,
+		ActionID:              target.ActionID,
+		IdempotencyKey:        target.IdempotencyKey,
 		ExpectedPostcondition: target.ExpectedPostcondition,
 	}
 	if elementIndex != "" {
@@ -712,6 +771,9 @@ func (s *service) performSecondaryAction(target actionTarget, elementIndex, acti
 		Element:               record,
 		Action:                action,
 		ObservationID:         target.ObservationID,
+		ActionIntent:          target.ActionIntent,
+		ActionID:              target.ActionID,
+		IdempotencyKey:        target.IdempotencyKey,
 		ExpectedPostcondition: target.ExpectedPostcondition,
 	})
 }
@@ -743,6 +805,9 @@ func (s *service) scroll(target actionTarget, direction, elementIndex string, pa
 		Direction:             normalized,
 		Pages:                 pages,
 		ObservationID:         target.ObservationID,
+		ActionIntent:          target.ActionIntent,
+		ActionID:              target.ActionID,
+		IdempotencyKey:        target.IdempotencyKey,
 		ExpectedPostcondition: target.ExpectedPostcondition,
 	})
 }
@@ -775,6 +840,9 @@ func (s *service) drag(target actionTarget, fromX, fromY, toX, toY *float64) too
 		ScreenshotID:          target.ScreenshotID,
 		WindowBounds:          resolved.snapshot.WindowBounds,
 		Capture:               resolved.snapshot.Capture,
+		ActionIntent:          target.ActionIntent,
+		ActionID:              target.ActionID,
+		IdempotencyKey:        target.IdempotencyKey,
 		ExpectedPostcondition: target.ExpectedPostcondition,
 	})
 }
@@ -793,6 +861,9 @@ func (s *service) typeText(target actionTarget, text string) toolCallResult {
 		Window:                resolved.window,
 		Text:                  text,
 		ObservationID:         target.ObservationID,
+		ActionIntent:          target.ActionIntent,
+		ActionID:              target.ActionID,
+		IdempotencyKey:        target.IdempotencyKey,
 		ExpectedPostcondition: target.ExpectedPostcondition,
 	})
 }
@@ -811,6 +882,9 @@ func (s *service) pressKey(target actionTarget, key string) toolCallResult {
 		Window:                resolved.window,
 		Key:                   key,
 		ObservationID:         target.ObservationID,
+		ActionIntent:          target.ActionIntent,
+		ActionID:              target.ActionID,
+		IdempotencyKey:        target.IdempotencyKey,
 		ExpectedPostcondition: target.ExpectedPostcondition,
 	})
 }
@@ -834,6 +908,9 @@ func (s *service) setValue(target actionTarget, elementIndex, value string) tool
 		Element:               record,
 		Value:                 value,
 		ObservationID:         target.ObservationID,
+		ActionIntent:          target.ActionIntent,
+		ActionID:              target.ActionID,
+		IdempotencyKey:        target.IdempotencyKey,
 		ExpectedPostcondition: target.ExpectedPostcondition,
 	})
 }
@@ -854,11 +931,56 @@ func (s *service) actionResult(cacheKey string, request psRequest) toolCallResul
 			request.BeforeScreenshotSHA256 = before.ScreenshotSHA256
 		}
 	}
+	if err := s.beginAction(&request); err != nil {
+		return textResult(err.Error(), true)
+	}
 	snapshot, result := s.refreshSnapshot(cacheKey, request)
 	if result.IsError {
 		return result
 	}
 	return snapshot.result()
+}
+
+func (s *service) beginAction(request *psRequest) error {
+	fingerprint := actionFingerprint(*request)
+	if strings.TrimSpace(request.ActionID) == "" {
+		request.ActionID = "runtime-" + fingerprint[:16]
+	}
+	key := strings.TrimSpace(request.IdempotencyKey)
+	if key == "" {
+		key = "derived-" + fingerprint
+		request.IdempotencyKey = key
+	}
+
+	s.actionsMu.Lock()
+	defer s.actionsMu.Unlock()
+	if previous, exists := s.actions[key]; exists {
+		return fmt.Errorf("duplicate_action(idempotency_key=%q, first_action_id=%q): this mutating action has already been dispatched; re-observe before deciding what to do next", key, previous.ActionID)
+	}
+	if len(s.actions) >= 512 {
+		var oldestKey string
+		var oldestTime time.Time
+		for candidate, record := range s.actions {
+			if oldestKey == "" || record.StartedAt.Before(oldestTime) {
+				oldestKey = candidate
+				oldestTime = record.StartedAt
+			}
+		}
+		delete(s.actions, oldestKey)
+	}
+	s.actions[key] = actionRecord{ActionID: request.ActionID, StartedAt: time.Now().UTC()}
+	return nil
+}
+
+func actionFingerprint(request psRequest) string {
+	request.ActionID = ""
+	request.IdempotencyKey = ""
+	data, err := json.Marshal(request)
+	if err != nil {
+		data = []byte(fmt.Sprintf("%s|%s|%s|%s", request.Tool, request.App, request.ObservationID, request.ScreenshotID))
+	}
+	digest := sha256.Sum256(data)
+	return fmt.Sprintf("%x", digest[:])
 }
 
 func postconditionElementRequirement(condition expectedPostcondition) (string, bool) {
@@ -907,6 +1029,7 @@ func (s *service) refreshSnapshot(cacheKey string, request psRequest) (*appSnaps
 	}
 	if isMutatingTool(request.Tool) {
 		response.Snapshot.ActionStatus = defaultString(response.Status, "applied")
+		response.Snapshot.ActionID = request.ActionID
 	}
 	s.rememberSnapshot(cacheKey, response.Snapshot)
 	return response.Snapshot, toolCallResult{}
@@ -1226,7 +1349,7 @@ func isActionControl(element *elementRecord) bool {
 	return false
 }
 
-func runPowerShell(request psRequest) (*psResponse, error) {
+func runPowerShell(parent context.Context, request psRequest) (*psResponse, error) {
 	if runtime.GOOS != "windows" {
 		return nil, errors.New("Windows Computer Use runtime requires powershell.exe on Windows")
 	}
@@ -1257,16 +1380,25 @@ func runPowerShell(request psRequest) (*psResponse, error) {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, windowsPowerShellExecutable(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath, operationPath)
 	output, err := cmd.CombinedOutput()
-	if ctx.Err() == context.DeadlineExceeded {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		if isMutatingTool(request.Tool) {
 			return &psResponse{OK: false, Error: "Windows runtime timed out after 30s", Status: "unknown"}, nil
 		}
 		return nil, errors.New("Windows runtime timed out after 30s")
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		if isMutatingTool(request.Tool) {
+			return &psResponse{OK: false, Error: "Windows runtime action was cancelled after dispatch", Status: "unknown"}, nil
+		}
+		return nil, context.Canceled
 	}
 	if err != nil {
 		text := strings.TrimSpace(string(output))
@@ -1363,14 +1495,32 @@ func requiredActionTarget(args map[string]any) (actionTarget, error) {
 	if err != nil {
 		return actionTarget{}, err
 	}
+	actionID, err := optionalActionIdentifier(args, "action_id")
+	if err != nil {
+		return actionTarget{}, err
+	}
+	idempotencyKey, err := optionalActionIdentifier(args, "idempotency_key")
+	if err != nil {
+		return actionTarget{}, err
+	}
 	return actionTarget{
 		App:                   app,
 		Window:                window,
 		ObservationID:         requiredString(args, "observation_id"),
 		ScreenshotID:          requiredString(args, "screenshot_id"),
 		ActionIntent:          intent,
+		ActionID:              actionID,
+		IdempotencyKey:        idempotencyKey,
 		ExpectedPostcondition: expectedPostcondition,
 	}, nil
+}
+
+func optionalActionIdentifier(args map[string]any, name string) (string, error) {
+	value := strings.TrimSpace(requiredString(args, name))
+	if len([]rune(value)) > 200 {
+		return "", fmt.Errorf("%s must be at most 200 characters", name)
+	}
+	return value, nil
 }
 
 func requiredActionIntent(args map[string]any) (actionIntent, error) {
@@ -1677,6 +1827,8 @@ func toolDefinitions() []toolDefinition {
 				"click_count":            integerProperty("Number of clicks. Defaults to 1"),
 				"mouse_button":           enumStringProperty("Mouse button to click. Defaults to left.", []string{"left", "right", "middle"}),
 				"click_method":           enumStringProperty("Click implementation: auto (default), accessibility, app_post, sky_click, or global. Accessibility requires element_index. Windows supports app_post through HWND messages and does not currently support sky_click or global.", clickMethodValues),
+				"action_id":              actionIDProperty(),
+				"idempotency_key":        idempotencyKeyProperty(),
 				"action_intent":          actionIntentProperty(),
 				"expected_postcondition": postconditionProperty(),
 			}, []string{"action_intent"}),
@@ -1693,6 +1845,8 @@ func toolDefinitions() []toolDefinition {
 				"from_y":                 numberProperty("Start Y coordinate"),
 				"to_x":                   numberProperty("End X coordinate"),
 				"to_y":                   numberProperty("End Y coordinate"),
+				"action_id":              actionIDProperty(),
+				"idempotency_key":        idempotencyKeyProperty(),
 				"action_intent":          actionIntentProperty(),
 				"expected_postcondition": postconditionProperty(),
 			}, []string{"from_x", "from_y", "to_x", "to_y", "action_intent"}),
@@ -1760,6 +1914,8 @@ func toolDefinitions() []toolDefinition {
 				"element_index":          stringProperty("Element identifier"),
 				"observation_id":         stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
 				"action":                 stringProperty("Secondary accessibility action name"),
+				"action_id":              actionIDProperty(),
+				"idempotency_key":        idempotencyKeyProperty(),
 				"action_intent":          actionIntentProperty(),
 				"expected_postcondition": postconditionProperty(),
 			}, []string{"element_index", "action", "action_intent"}),
@@ -1773,6 +1929,8 @@ func toolDefinitions() []toolDefinition {
 				"window":                 windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
 				"observation_id":         stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
 				"key":                    stringProperty("Key or key-combination to press"),
+				"action_id":              actionIDProperty(),
+				"idempotency_key":        idempotencyKeyProperty(),
 				"action_intent":          actionIntentProperty(),
 				"expected_postcondition": postconditionProperty(),
 			}, []string{"key", "action_intent"}),
@@ -1788,6 +1946,8 @@ func toolDefinitions() []toolDefinition {
 				"element_index":          stringProperty("Element identifier"),
 				"observation_id":         stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
 				"pages":                  numberProperty("Number of pages to scroll. Fractional values are supported. Defaults to 1"),
+				"action_id":              actionIDProperty(),
+				"idempotency_key":        idempotencyKeyProperty(),
 				"action_intent":          actionIntentProperty(),
 				"expected_postcondition": postconditionProperty(),
 			}, []string{"element_index", "direction", "action_intent"}),
@@ -1802,6 +1962,8 @@ func toolDefinitions() []toolDefinition {
 				"element_index":          stringProperty("Element identifier"),
 				"observation_id":         stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
 				"value":                  stringProperty("Value to assign"),
+				"action_id":              actionIDProperty(),
+				"idempotency_key":        idempotencyKeyProperty(),
 				"action_intent":          actionIntentProperty(),
 				"expected_postcondition": postconditionProperty(),
 			}, []string{"element_index", "value", "action_intent"}),
@@ -1815,6 +1977,8 @@ func toolDefinitions() []toolDefinition {
 				"window":                 windowRefProperty("Preferred exact target window reference returned by get_window or get_window_state"),
 				"observation_id":         stringProperty("Required with window. Must match the latest snapshot for that WindowRef"),
 				"text":                   stringProperty("Literal text to type"),
+				"action_id":              actionIDProperty(),
+				"idempotency_key":        idempotencyKeyProperty(),
 				"action_intent":          actionIntentProperty(),
 				"expected_postcondition": postconditionProperty(),
 			}, []string{"text", "action_intent"}),
@@ -1914,6 +2078,24 @@ func actionIntentProperty() map[string]any {
 		},
 		"required":             []string{"kind", "summary"},
 		"additionalProperties": false,
+	}
+}
+
+func actionIDProperty() map[string]any {
+	return map[string]any{
+		"type":        "string",
+		"minLength":   1,
+		"maxLength":   200,
+		"description": "Stable per-dispatch action identifier. The DSH adapter supplies its tool call id when omitted.",
+	}
+}
+
+func idempotencyKeyProperty() map[string]any {
+	return map[string]any{
+		"type":        "string",
+		"minLength":   1,
+		"maxLength":   200,
+		"description": "Logical-operation key used to reject duplicate dispatch. Reuse only for the exact same intended action.",
 	}
 }
 
@@ -2275,23 +2457,139 @@ func readJSONSource(inline, file string) (string, error) {
 	return string(data), nil
 }
 
+type mcpActiveRequest struct {
+	key    string
+	cancel context.CancelFunc
+}
+
+type mcpRequestTracker struct {
+	mu     sync.Mutex
+	active map[string]*mcpActiveRequest
+	wg     sync.WaitGroup
+}
+
+func newMCPRequestTracker() *mcpRequestTracker {
+	return &mcpRequestTracker{active: map[string]*mcpActiveRequest{}}
+}
+
+func mcpRequestIDKey(id any) string {
+	data, err := json.Marshal(id)
+	if err != nil {
+		return fmt.Sprintf("%v", id)
+	}
+	return string(data)
+}
+
+func (tracker *mcpRequestTracker) start(id any) (context.Context, *mcpActiveRequest) {
+	ctx, cancel := context.WithCancel(context.Background())
+	request := &mcpActiveRequest{key: mcpRequestIDKey(id), cancel: cancel}
+	tracker.mu.Lock()
+	if previous := tracker.active[request.key]; previous != nil {
+		previous.cancel()
+	}
+	tracker.active[request.key] = request
+	tracker.wg.Add(1)
+	tracker.mu.Unlock()
+	return ctx, request
+}
+
+func (tracker *mcpRequestTracker) finish(request *mcpActiveRequest) {
+	tracker.mu.Lock()
+	if tracker.active[request.key] == request {
+		delete(tracker.active, request.key)
+	}
+	tracker.mu.Unlock()
+	request.cancel()
+	tracker.wg.Done()
+}
+
+func (tracker *mcpRequestTracker) cancel(id any) {
+	tracker.mu.Lock()
+	request := tracker.active[mcpRequestIDKey(id)]
+	tracker.mu.Unlock()
+	if request != nil {
+		request.cancel()
+	}
+}
+
+func (tracker *mcpRequestTracker) cancelAll() {
+	tracker.mu.Lock()
+	requests := make([]*mcpActiveRequest, 0, len(tracker.active))
+	for _, request := range tracker.active {
+		requests = append(requests, request)
+	}
+	tracker.mu.Unlock()
+	for _, request := range requests {
+		request.cancel()
+	}
+}
+
 func runMCP(stdin io.Reader, stdout io.Writer) error {
+	return runMCPWithService(stdin, stdout, newService())
+}
+
+func runMCPWithService(stdin io.Reader, stdout io.Writer, svc *service) error {
 	prewarmControlIndicator()
-	svc := newService()
 	decoder := json.NewDecoder(stdin)
 	encoder := json.NewEncoder(stdout)
+	tracker := newMCPRequestTracker()
+	var encoderMu sync.Mutex
+	var writeErr error
+	writeResponse := func(response map[string]any) error {
+		encoderMu.Lock()
+		defer encoderMu.Unlock()
+		if writeErr == nil {
+			writeErr = encoder.Encode(response)
+		}
+		return writeErr
+	}
+	currentWriteError := func() error {
+		encoderMu.Lock()
+		defer encoderMu.Unlock()
+		return writeErr
+	}
+	defer hideControlIndicator()
 	for {
 		var request map[string]any
 		if err := decoder.Decode(&request); err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil
+				tracker.cancelAll()
+				tracker.wg.Wait()
+				return currentWriteError()
 			}
-			_ = encoder.Encode(jsonRPCError(nil, -32700, "Invalid JSON-RPC payload"))
+			if err := writeResponse(jsonRPCError(nil, -32700, "Invalid JSON-RPC payload")); err != nil {
+				tracker.cancelAll()
+				tracker.wg.Wait()
+				return err
+			}
 			continue
 		}
-		response := handleMCPRequest(request, svc)
+		method, _ := request["method"].(string)
+		params, _ := request["params"].(map[string]any)
+		if method == "notifications/cancelled" {
+			if params != nil {
+				tracker.cancel(params["requestId"])
+			}
+			continue
+		}
+		if method == "notifications/turn-ended" {
+			tracker.cancelAll()
+		}
+		if method == "tools/call" {
+			ctx, active := tracker.start(request["id"])
+			go func(request map[string]any, ctx context.Context, active *mcpActiveRequest) {
+				defer tracker.finish(active)
+				if response := handleMCPRequestContext(ctx, request, svc); response != nil {
+					writeResponse(response)
+				}
+			}(request, ctx, active)
+			continue
+		}
+		response := handleMCPRequestContext(context.Background(), request, svc)
 		if response != nil {
-			if err := encoder.Encode(response); err != nil {
+			if err := writeResponse(response); err != nil {
+				tracker.cancelAll()
+				tracker.wg.Wait()
 				return err
 			}
 		}
@@ -2299,6 +2597,10 @@ func runMCP(stdin io.Reader, stdout io.Writer) error {
 }
 
 func handleMCPRequest(request map[string]any, svc *service) map[string]any {
+	return handleMCPRequestContext(context.Background(), request, svc)
+}
+
+func handleMCPRequestContext(ctx context.Context, request map[string]any, svc *service) map[string]any {
 	id := request["id"]
 	method, _ := request["method"].(string)
 	params, _ := request["params"].(map[string]any)
@@ -2328,7 +2630,7 @@ func handleMCPRequest(request map[string]any, svc *service) map[string]any {
 		if arguments == nil {
 			arguments = map[string]any{}
 		}
-		return jsonRPCResult(id, svc.callTool(name, arguments))
+		return jsonRPCResult(id, svc.callToolContext(ctx, name, arguments))
 	default:
 		if method == "" {
 			return nil

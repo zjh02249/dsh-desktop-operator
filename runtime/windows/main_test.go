@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -55,6 +59,11 @@ func TestWindowToolSchemas(t *testing.T) {
 		}
 		if !containsString(tool.InputSchema["required"].([]string), "action_intent") {
 			t.Fatalf("%s should require action_intent", name)
+		}
+		for _, field := range []string{"action_id", "idempotency_key"} {
+			if _, ok := properties[field]; !ok {
+				t.Fatalf("%s should expose %s", name, field)
+			}
 		}
 		postcondition, ok := properties["expected_postcondition"].(map[string]any)
 		if !ok || postcondition["type"] != "object" {
@@ -112,8 +121,10 @@ func TestRequiredActionTarget(t *testing.T) {
 			"hwnd":       "1234",
 			"generation": "42-1234-999",
 		},
-		"observation_id": "obs-1",
-		"screenshot_id":  "shot-1",
+		"observation_id":  "obs-1",
+		"screenshot_id":   "shot-1",
+		"action_id":       "action-1",
+		"idempotency_key": "logical-action-1",
 		"action_intent": map[string]any{
 			"kind":    "edit",
 			"summary": "Fill the note",
@@ -122,7 +133,7 @@ func TestRequiredActionTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Window == nil || target.Window.HWND != "1234" || target.ObservationID != "obs-1" || target.ScreenshotID != "shot-1" || target.ActionIntent.Kind != "edit" {
+	if target.Window == nil || target.Window.HWND != "1234" || target.ObservationID != "obs-1" || target.ScreenshotID != "shot-1" || target.ActionID != "action-1" || target.IdempotencyKey != "logical-action-1" || target.ActionIntent.Kind != "edit" {
 		t.Fatalf("requiredActionTarget() = %#v", target)
 	}
 	if _, err := requiredActionTarget(map[string]any{}); err == nil || err.Error() != "One of app or window is required" {
@@ -239,7 +250,7 @@ func TestWindowToolDispatchPreservesIdentity(t *testing.T) {
 	}
 	service := newService()
 	var requests []psRequest
-	service.runPS = func(request psRequest) (*psResponse, error) {
+	service.runPS = func(_ context.Context, request psRequest) (*psResponse, error) {
 		requests = append(requests, request)
 		switch request.Tool {
 		case "get_window":
@@ -387,7 +398,7 @@ func TestCoordinateActionForwardsCaptureMappingContract(t *testing.T) {
 		Capture:       capture,
 	})
 	var request psRequest
-	service.runPS = func(input psRequest) (*psResponse, error) {
+	service.runPS = func(_ context.Context, input psRequest) (*psResponse, error) {
 		request = input
 		return &psResponse{OK: true, Status: "applied", Snapshot: &appSnapshot{
 			App:           appDescriptor{Name: "notepad", PID: 42},
@@ -418,7 +429,7 @@ func TestActionPostconditionsAreForwardedAndPreflighted(t *testing.T) {
 		WindowBounds:     &frame{X: 0, Y: 0, Width: 200, Height: 100},
 	})
 	var request psRequest
-	service.runPS = func(input psRequest) (*psResponse, error) {
+	service.runPS = func(_ context.Context, input psRequest) (*psResponse, error) {
 		request = input
 		return &psResponse{OK: true, Status: "unknown", Snapshot: &appSnapshot{
 			App:           appDescriptor{Name: "notepad", PID: 42},
@@ -475,7 +486,7 @@ func TestLegacyActionUsesCachedWindowIdentity(t *testing.T) {
 		WindowBounds:  &frame{X: 10, Y: 10, Width: 100, Height: 100},
 	})
 	var request psRequest
-	service.runPS = func(input psRequest) (*psResponse, error) {
+	service.runPS = func(_ context.Context, input psRequest) (*psResponse, error) {
 		request = input
 		return &psResponse{OK: true, Status: "applied", Snapshot: &appSnapshot{
 			App:           appDescriptor{Name: "notepad", BundleIdentifier: "notepad", PID: 42},
@@ -506,7 +517,7 @@ func TestWindowTextActionForwardsObservationID(t *testing.T) {
 		ScreenshotID:  "shot-1",
 	})
 	var request psRequest
-	service.runPS = func(input psRequest) (*psResponse, error) {
+	service.runPS = func(_ context.Context, input psRequest) (*psResponse, error) {
 		request = input
 		return &psResponse{OK: true, Status: "applied", Snapshot: &appSnapshot{
 			App:           appDescriptor{Name: "notepad", BundleIdentifier: "notepad", PID: 42},
@@ -522,6 +533,173 @@ func TestWindowTextActionForwardsObservationID(t *testing.T) {
 	}
 	if request.ObservationID != "obs-1" {
 		t.Fatalf("type_text ObservationID = %q, want obs-1", request.ObservationID)
+	}
+}
+
+func TestDuplicateIdempotencyKeyIsRejectedAfterDispatch(t *testing.T) {
+	window := windowRef{AppID: "notepad", PID: 42, HWND: "1234", Generation: "42-1234-999"}
+	service := newService()
+	service.rememberSnapshot(snapshotWindowKey(window), &appSnapshot{
+		App:           appDescriptor{Name: "notepad", PID: 42},
+		Window:        &window,
+		ObservationID: "obs-1",
+		ScreenshotID:  "shot-1",
+	})
+	var calls atomic.Int32
+	service.runPS = func(_ context.Context, input psRequest) (*psResponse, error) {
+		calls.Add(1)
+		return &psResponse{OK: true, Status: "applied", Snapshot: &appSnapshot{
+			App:           appDescriptor{Name: "notepad", PID: 42},
+			Window:        &window,
+			ObservationID: "obs-2",
+			ScreenshotID:  "shot-2",
+		}}, nil
+	}
+
+	first := service.typeText(actionTarget{
+		Window:         &window,
+		ObservationID:  "obs-1",
+		ActionID:       "action-1",
+		IdempotencyKey: "logical-operation",
+	}, "hello")
+	if first.IsError || !strings.Contains(first.Content[0].Text, "ActionID: action-1") {
+		t.Fatalf("first action result = %#v", first)
+	}
+
+	duplicate := service.typeText(actionTarget{
+		Window:         &window,
+		ObservationID:  "obs-2",
+		ActionID:       "action-2",
+		IdempotencyKey: "logical-operation",
+	}, "hello")
+	if !duplicate.IsError || !strings.Contains(duplicate.Content[0].Text, "duplicate_action") {
+		t.Fatalf("duplicate action result = %#v", duplicate)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("PowerShell dispatch count = %d, want 1", got)
+	}
+}
+
+func TestCallCoordinatorCancelsQueuedAndActiveCalls(t *testing.T) {
+	service := newService()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	service.runPS = func(ctx context.Context, _ psRequest) (*psResponse, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+			select {
+			case <-release:
+				return &psResponse{OK: true, Text: "first"}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return &psResponse{OK: true, Text: "unexpected"}, nil
+	}
+
+	firstDone := make(chan toolCallResult, 1)
+	go func() {
+		firstDone <- service.callToolContext(context.Background(), "list_apps", map[string]any{})
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first call did not start")
+	}
+
+	queuedContext, cancelQueued := context.WithCancel(context.Background())
+	queuedDone := make(chan toolCallResult, 1)
+	go func() {
+		queuedDone <- service.callToolContext(queuedContext, "list_apps", map[string]any{})
+	}()
+	cancelQueued()
+	queued := <-queuedDone
+	if !queued.IsError || !strings.Contains(queued.Content[0].Text, "cancelled_before_dispatch") {
+		t.Fatalf("queued cancellation result = %#v", queued)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("queued call reached PowerShell, count = %d", got)
+	}
+
+	close(release)
+	if result := <-firstDone; result.IsError {
+		t.Fatalf("first call failed: %#v", result)
+	}
+
+	activeContext, cancelActive := context.WithCancel(context.Background())
+	activeStarted := make(chan struct{})
+	service.runPS = func(ctx context.Context, _ psRequest) (*psResponse, error) {
+		close(activeStarted)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	activeDone := make(chan toolCallResult, 1)
+	go func() {
+		activeDone <- service.callToolContext(activeContext, "list_apps", map[string]any{})
+	}()
+	<-activeStarted
+	cancelActive()
+	active := <-activeDone
+	if !active.IsError || !strings.Contains(active.Content[0].Text, "context canceled") {
+		t.Fatalf("active cancellation result = %#v", active)
+	}
+}
+
+func TestMCPCancelNotificationStopsActiveToolCall(t *testing.T) {
+	service := newService()
+	started := make(chan struct{})
+	service.runPS = func(ctx context.Context, _ psRequest) (*psResponse, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	inputReader, inputWriter := io.Pipe()
+	var output bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- runMCPWithService(inputReader, &output, service)
+	}()
+	encoder := json.NewEncoder(inputWriter)
+	if err := encoder.Encode(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      7,
+		"method":  "tools/call",
+		"params":  map[string]any{"name": "list_apps", "arguments": map[string]any{}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("MCP tool call did not start")
+	}
+	if err := encoder.Encode(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "notifications/cancelled",
+		"params":  map[string]any{"requestId": 7, "reason": "agent turn stopped"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := inputWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatalf("decode MCP cancellation response: %v\n%s", err, output.String())
+	}
+	result := response["result"].(map[string]any)
+	if result["isError"] != true {
+		t.Fatalf("cancelled MCP result = %#v", result)
+	}
+	content := result["content"].([]any)[0].(map[string]any)
+	if !strings.Contains(content["text"].(string), "context canceled") {
+		t.Fatalf("cancelled MCP content = %#v", content)
 	}
 }
 
@@ -750,6 +928,20 @@ func TestWindowsRuntimeForegroundActionsRequireOptIn(t *testing.T) {
 	}
 }
 
+func TestWindowsRuntimeSerializesForegroundControlAcrossProcesses(t *testing.T) {
+	for _, marker := range []string{
+		"DSHDesktopOperator.ForegroundInput.v1",
+		"OPEN_COMPUTER_USE_WINDOWS_ACTION_LOCK_TIMEOUT_MS",
+		"Enter-ForegroundInputLock",
+		"Exit-ForegroundInputLock",
+		"action_locked",
+	} {
+		if !strings.Contains(windowsRuntimeScript, marker) {
+			t.Fatalf("Windows runtime missing foreground action lock marker %q", marker)
+		}
+	}
+}
+
 func TestWindowsRuntimeWindowIdentityAndActivationContract(t *testing.T) {
 	for _, marker := range []string{
 		"EnumWindows",
@@ -792,7 +984,7 @@ func TestUTF8EncodingInPowerShellScript(t *testing.T) {
 func TestWindowsRuntimeRetriesTransientAddTypeCompilation(t *testing.T) {
 	markers := []string{
 		"$win32Source = @\"",
-		"for ($attempt = 1; $attempt -le 3; $attempt++)",
+		"for ($attempt = 1; $attempt -le 5; $attempt++)",
 		"$_.FullyQualifiedErrorId -like \"SOURCE_CODE_ERROR*\"",
 		"Add-Type -TypeDefinition $win32Source -ErrorAction Stop",
 	}
@@ -989,7 +1181,7 @@ func TestControlActionShowsVisualIndicatorBeforePowerShell(t *testing.T) {
 	service.showIndicator = func(request psRequest) {
 		order = append(order, "indicator:"+request.Tool)
 	}
-	service.runPS = func(request psRequest) (*psResponse, error) {
+	service.runPS = func(_ context.Context, request psRequest) (*psResponse, error) {
 		order = append(order, "powershell:"+request.Tool)
 		return &psResponse{
 			OK: true,

@@ -211,6 +211,8 @@ try {
         observation_id = $initial.ObservationID
         element_index = $inputElement.Index
         value = "alpha"
+        action_id = "smoke-set-alpha"
+        idempotency_key = "smoke-logical-set-alpha"
         action_intent = @{ kind = "edit"; summary = "Set the fixture input to alpha" }
         expected_postcondition = @{
             type = "all"
@@ -225,6 +227,23 @@ try {
     if ($afterSet.Text -notmatch "alpha") { throw "set_value post-action snapshot did not contain alpha" }
     if ($afterSet.Text -notmatch "ActionStatus: applied" -or $afterSet.Text -notmatch "Postcondition: type=all satisfied=true") {
         throw "Satisfied set_value postcondition was not reported as applied"
+    }
+    if ($afterSet.Text -notmatch "(?m)^ActionID: smoke-set-alpha$" -or $afterSet.Text -notmatch "(?m)^ActionDurationMs: \d+$") {
+        throw "set_value did not expose action identity and duration diagnostics"
+    }
+
+    $inputElement = Get-Element $afterSet.Text "Smoke input"
+    $duplicateSetValue = Invoke-ComputerUseTool "set_value" @{
+        window = $window
+        observation_id = $afterSet.ObservationID
+        element_index = $inputElement.Index
+        value = "alpha"
+        action_id = "smoke-set-alpha-retry"
+        idempotency_key = "smoke-logical-set-alpha"
+        action_intent = @{ kind = "edit"; summary = "Retry the same fixture input update" }
+    }
+    if (-not $duplicateSetValue.isError -or $duplicateSetValue.content[0].text -notmatch "duplicate_action") {
+        throw "A duplicate idempotency key was not rejected before dispatch"
     }
 
     $inputElement = Get-Element $afterSet.Text "Smoke input"
@@ -353,6 +372,8 @@ try {
         movedWindowScreenshotRejected = $true
         focusIdentityVerified = $true
         setValueVerified = $true
+        actionIdentityVerified = $true
+        duplicateActionRejected = $true
         postconditionAppliedVerified = $true
         postconditionUnknownVerified = $true
         coordinateClickVerified = $true

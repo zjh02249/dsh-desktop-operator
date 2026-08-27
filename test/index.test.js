@@ -119,6 +119,7 @@ test('resolveRuntimeEnv enables foreground verification by default', () => {
     OPEN_COMPUTER_USE_WINDOWS_ALLOW_APP_LAUNCH: '0',
     OPEN_COMPUTER_USE_WINDOWS_INTERACTION_MODE: 'foreground-verified',
     OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR: '1',
+    OPEN_COMPUTER_USE_WINDOWS_ACTION_LOCK_TIMEOUT_MS: '5000',
   })
 })
 
@@ -141,6 +142,12 @@ test('resolveRuntimeEnv keeps unrelated env and lets explicit config win', () =>
   assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_ALLOW_APP_LAUNCH, '1')
   assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_INTERACTION_MODE, 'foreground-verified')
   assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR, '1')
+  assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_ACTION_LOCK_TIMEOUT_MS, '5000')
+})
+
+test('resolveRuntimeEnv forwards an explicit foreground action lock timeout', () => {
+  const env = resolveRuntimeEnv({ actionLockTimeoutMs: 12_345 })
+  assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_ACTION_LOCK_TIMEOUT_MS, '12345')
 })
 
 test('resolveRuntimeEnv disables focus flags in background mode', () => {
@@ -218,6 +225,48 @@ test('Computer Use ownership is released when the owning Agent turn stops', asyn
     ),
     continueDecision,
   )
+})
+
+test('Computer Use mutating calls receive stable action identity before dispatch', async () => {
+  const handlers = new Map()
+  const ctx = {
+    on(event, handler) {
+      handlers.set(event, handler)
+    },
+    get() {
+      return undefined
+    },
+  }
+  const agent = { session: { id: 'session-a' } }
+  installAccessGate(ctx, 'allow')
+  const preExecute = handlers.get('tools/pre-execute')
+  const call = {
+    name: 'mcp__computer_use__type_text',
+    callId: 'call-action-1',
+    agent,
+    arguments: {
+      text: 'hello',
+      action_intent: { kind: 'edit', summary: 'Type text into the focused editor' },
+    },
+  }
+
+  assert.deepEqual(await preExecute(call, async () => ({ kind: 'continue' })), { kind: 'continue' })
+  assert.equal(call.arguments.action_id, 'call-action-1')
+  assert.equal(call.arguments.idempotency_key, 'call-action-1')
+
+  const explicit = {
+    name: 'mcp__computer_use__click',
+    callId: 'call-action-2',
+    agent,
+    arguments: {
+      action_id: 'logical-action',
+      idempotency_key: 'logical-operation',
+      action_intent: { kind: 'navigate', summary: 'Open settings' },
+    },
+  }
+  await preExecute(explicit, async () => ({ kind: 'continue' }))
+  assert.equal(explicit.arguments.action_id, 'logical-action')
+  assert.equal(explicit.arguments.idempotency_key, 'logical-operation')
 })
 
 test('Computer Use action risk classification fails closed without a declared intent', () => {

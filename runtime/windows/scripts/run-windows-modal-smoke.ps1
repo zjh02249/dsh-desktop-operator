@@ -179,6 +179,8 @@ try {
     if (-not $observationMatch.Success -or -not $closeMatch.Success) {
         throw "Modal snapshot did not expose its close action and observation id"
     }
+    $reactivatedModal = Invoke-ComputerUseTool "activate_window" @{ window = $modalWindow }
+    Assert-ToolSuccess $reactivatedModal "reactivate modal before close"
     $closedModal = Invoke-ComputerUseTool "click" @{
         window = $modalWindow
         observation_id = $observationMatch.Groups["value"].Value

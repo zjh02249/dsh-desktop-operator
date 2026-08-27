@@ -45,6 +45,8 @@ export interface Config {
     allowAppLaunch?: boolean;
     /** Show a click-through desktop banner and cursor halo while Computer Use controls Windows. */
     visualIndicator?: boolean;
+    /** Maximum wait for the cross-process foreground-input lock in milliseconds. */
+    actionLockTimeoutMs?: number;
     /** Per-MCP-tool deadline in milliseconds. */
     toolCallTimeoutMs?: number;
     /** Whether initial MCP launch or tool discovery failure rejects plugin activation. */
@@ -90,7 +92,7 @@ export declare function resolveRuntimeLaunch(config: Pick<Config, 'runtimeExecut
  * @param config - plugin config carrying explicit env plus high-level runtime switches.
  * @returns env object suitable for both MCP launch and one-shot cleanup helpers.
  */
-export declare function resolveRuntimeEnv(config: Pick<Config, 'env' | 'interactionMode' | 'allowAppLaunch' | 'visualIndicator'>): Record<string, string>;
+export declare function resolveRuntimeEnv(config: Pick<Config, 'env' | 'interactionMode' | 'allowAppLaunch' | 'visualIndicator' | 'actionLockTimeoutMs'>): Record<string, string>;
 /** Model guidance for semantic-first, observable desktop operation. */
 export declare const COMPUTER_USE_PROMPT: string;
 /**

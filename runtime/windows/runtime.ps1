@@ -318,15 +318,15 @@ public static class OCUWin32 {
 "@
 
 $addTypeFailure = $null
-for ($attempt = 1; $attempt -le 3; $attempt++) {
+for ($attempt = 1; $attempt -le 5; $attempt++) {
     try {
         Add-Type -TypeDefinition $win32Source -ErrorAction Stop
         $addTypeFailure = $null
         break
     } catch {
         $addTypeFailure = $_
-        if ($attempt -lt 3 -and $_.FullyQualifiedErrorId -like "SOURCE_CODE_ERROR*") {
-            Start-Sleep -Milliseconds (100 * $attempt)
+        if ($attempt -lt 5 -and $_.FullyQualifiedErrorId -like "SOURCE_CODE_ERROR*") {
+            Start-Sleep -Milliseconds (250 * $attempt)
             continue
         }
         break
@@ -1550,6 +1550,50 @@ function Test-MutatingTool([string]$toolName) {
     return @("click", "drag", "perform_secondary_action", "press_key", "scroll", "set_value", "type_text") -contains $toolName
 }
 
+function Test-ControlTool([string]$toolName) {
+    return $toolName -eq "launch_app" -or $toolName -eq "activate_window" -or (Test-MutatingTool $toolName)
+}
+
+function Get-ActionLockTimeoutMilliseconds {
+    $value = 5000
+    $configured = [Environment]::GetEnvironmentVariable("OPEN_COMPUTER_USE_WINDOWS_ACTION_LOCK_TIMEOUT_MS")
+    $parsed = 0
+    if (-not [string]::IsNullOrWhiteSpace($configured) -and [int]::TryParse($configured, [ref]$parsed) -and $parsed -ge 1 -and $parsed -le 120000) {
+        $value = $parsed
+    }
+    return $value
+}
+
+function Enter-ForegroundInputLock {
+    $name = "Local\DSHDesktopOperator.ForegroundInput.v1"
+    $mutex = New-Object System.Threading.Mutex($false, $name)
+    $acquired = $false
+    try {
+        try {
+            $acquired = $mutex.WaitOne((Get-ActionLockTimeoutMilliseconds))
+        } catch [System.Threading.AbandonedMutexException] {
+            $acquired = $true
+        }
+        if (-not $acquired) {
+            throw "action_locked(name=$name): another desktop operator is controlling foreground input"
+        }
+        return $mutex
+    } catch {
+        if (-not $acquired) { $mutex.Dispose() }
+        throw
+    }
+}
+
+function Exit-ForegroundInputLock($mutex) {
+    if ($null -eq $mutex) { return }
+    try {
+        $mutex.ReleaseMutex()
+    } catch {
+    } finally {
+        $mutex.Dispose()
+    }
+}
+
 function Resolve-ActionFailureStatus([string]$message) {
     if (
         $message -like "stale_window*" -or
@@ -1560,6 +1604,7 @@ function Resolve-ActionFailureStatus([string]$message) {
         $message -like "focus_not_acquired*" -or
         $message -like "focused_element_not_in_target*" -or
         $message -like "focused_element_unknown*" -or
+        $message -like "action_locked*" -or
         $message -like "occluded_by_non_target*" -or
         $message -like "coordinate_mapping_unavailable*" -or
         $message -like "coordinate_out_of_bounds*" -or
@@ -2019,8 +2064,13 @@ function Set-ElementValueVerified($element, $root, [int]$processId, [IntPtr]$top
 # Chinese text passed to set_value/type_text.
 $operationJson = [System.IO.File]::ReadAllText($OperationPath, [System.Text.Encoding]::UTF8)
 $operation = $operationJson | ConvertFrom-Json
+$operationStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$foregroundInputLock = $null
 
 try {
+    if (Test-ControlTool ([string]$operation.tool)) {
+        $foregroundInputLock = Enter-ForegroundInputLock
+    }
     if ($operation.tool -eq "list_apps") {
         $response = [pscustomobject]@{ ok = $true; text = (List-Apps) }
     } elseif ($operation.tool -eq "list_windows") {
@@ -2182,6 +2232,14 @@ try {
         $status = Resolve-ActionFailureStatus $message
     }
     $response = [pscustomobject]@{ ok = $false; error = $message; status = $status }
+} finally {
+    Exit-ForegroundInputLock $foregroundInputLock
+    $operationStopwatch.Stop()
+}
+
+if ($null -ne $response.snapshot -and (Test-MutatingTool ([string]$operation.tool))) {
+    $response.snapshot | Add-Member -NotePropertyName actionId -NotePropertyValue ([string](Get-OperationPropertyValue $operation "action_id")) -Force
+    $response.snapshot | Add-Member -NotePropertyName actionDurationMs -NotePropertyValue ([long]$operationStopwatch.ElapsedMilliseconds) -Force
 }
 
 $response | ConvertTo-Json -Depth 50 -Compress

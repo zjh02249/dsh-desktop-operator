@@ -70,6 +70,7 @@ try {
         "package/runtime/windows/scripts/run-windows-action-smoke.ps1",
         "package/runtime/windows/scripts/run-windows-capture-smoke.ps1",
         "package/runtime/windows/scripts/run-windows-modal-smoke.ps1",
+        "package/runtime/windows/scripts/run-windows-reliability-smoke.ps1",
         "package/runtime/windows/scripts/run-windows-window-smoke.ps1",
         "package/runtime/LICENSE.open-computer-use",
         "package/runtime/THIRD_PARTY_NOTICES.open-computer-use.md"

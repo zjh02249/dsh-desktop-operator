@@ -10,7 +10,7 @@
 
 项目目标不是简单模拟鼠标键盘，而是逐步复刻 Codex Computer Use 的关键工程能力：精确选择窗口、观察界面、优先使用无障碍元素、执行动作、验证结果、处理模态窗口、在敏感动作前确认，并让用户清楚看到电脑正在被控制。
 
-> 当前状态：`0.8.0`，Windows-first，可供开发者试用。已在 Windows 10 x64 与 DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6` 上完成真实桌面验证；尚不应视为跨系统、跨应用都达到生产级稳定性的最终版本。
+> 当前开发版本：`0.9.0`；最新公开 Release：`0.8.0`。项目 Windows-first，可供开发者试用。已在 Windows 10 x64 与 DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6` 上完成真实桌面验证；尚不应视为跨系统、跨应用都达到生产级稳定性的最终版本。
 
 ### 项目关系与归属
 
@@ -180,6 +180,7 @@ dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
 - 动作后可验证 `target_focused`、`target_value_equals`、`text_contains`、`foreground_window`、`screenshot_changed` 和 `window_closed`。
 - 支持最多 8 个非嵌套 `all`/`any` 后置条件组合。
 - 只有结果得到验证时返回 `ActionStatus: applied`；无法判断时返回 `unknown`，避免假报成功。
+- DSH 为每个有副作用调用注入 `action_id` 与 `idempotency_key`；运行时拒绝已经派发过的同一逻辑动作，并在结果中返回动作 ID 和耗时。
 
 ### 用户可见控制状态
 
@@ -193,6 +194,8 @@ dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
 - 首个通过策略的 Agent turn 获得运行时租约，避免两个会话同时复用同一套元素快照。
 - turn 停止、Agent 销毁或 Session 销毁时自动释放；新会话无需重启 DSH 即可继续使用。
 - 并发控制请求会明确失败，不会静默把输入发给错误会话。
+- MCP 工具调用支持标准取消通知；轮次停止时会取消排队调用，并终止仍在执行的 PowerShell 动作进程。
+- 同一 runtime 内的工具调用严格串行；多个 runtime 进程通过 Windows 命名互斥锁共享唯一前台输入通道。
 - 检测被 owned modal 禁用的 owner window，并返回 `modal_window_required` 和候选窗口。
 
 ### 高风险动作确认
@@ -210,7 +213,7 @@ dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
 - Electron、Qt、WinUI、UWP、Office 与复杂自绘控件的应用适配矩阵。
 - 钉钉真实联系人搜索、中文输入、消息内容复核和“发送前确认”的完整端到端验收。
 - 截图作为模型图片附件依赖 DSH 挂载 `ctx.attachments`，并要求所选模型路由支持图片输入。
-- 更细的用户取消、窗口级锁、崩溃恢复和重复动作去重机制。
+- 跨 runtime 崩溃后的持久化幂等日志与更完整的审计回放。
 - 风险动作分类目前主要依赖声明、控件标签和策略，尚不是完整的语义安全引擎。
 
 ## 尚未实现
@@ -280,6 +283,7 @@ get_window_state
 | `interactionMode` | `foreground-verified` | 前台焦点验证；也可选能力较弱的 `background-best-effort` |
 | `allowAppLaunch` | `false` | 是否允许 runtime 启动应用 |
 | `visualIndicator` | `true` | 是否显示控制提示条、鼠标光环和平滑移动 |
+| `actionLockTimeoutMs` | `5000` | 等待跨进程 Windows 前台输入锁的最长毫秒数，范围 `1–120000` |
 | `toolCallTimeoutMs` | `120000` | 单次工具调用超时毫秒数 |
 | `failOnStartupError` | `true` | runtime 启动或工具发现失败时是否拒绝激活 |
 | `reconnect.enabled` | `true` | 意外断开后是否重连 |
@@ -336,6 +340,15 @@ runtime/windows/scripts/run-windows-window-smoke.ps1
 runtime/windows/scripts/run-windows-capture-smoke.ps1
 runtime/windows/scripts/run-windows-action-smoke.ps1
 runtime/windows/scripts/run-windows-modal-smoke.ps1
+runtime/windows/scripts/run-windows-reliability-smoke.ps1
+```
+
+完整可靠性入口会采集当前显示器数量、负坐标和 DPI，并顺序运行遮挡捕获、模态恢复和动作闭环；可用 `-DisplayOnly` 仅检查显示拓扑、用 `-ActionIterations 100` 做压力测试，也可通过 `-RealApp`/`-RealAppTitle` 加入只观察、不发送的真实应用窗口验收：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\runtime\windows\scripts\run-windows-reliability-smoke.ps1 `
+  -ActionIterations 1
 ```
 
 Release 构建不会声称替代真实应用验收。涉及发送消息、删除数据、购买、上传或权限修改时，必须在隔离测试对象上执行，并保留最终用户确认。

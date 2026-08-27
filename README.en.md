@@ -10,7 +10,7 @@
 
 The goal is more than basic mouse and keyboard emulation. This project is progressively implementing the engineering foundations behind a Codex-like Computer Use experience: exact window selection, UI observation, accessibility-first targeting, action execution, post-action verification, modal recovery, confirmation before consequential actions, and an obvious visual indication while the computer is being controlled.
 
-> Current status: `0.8.0`, Windows-first, suitable for developer evaluation. Real desktop tests have passed on Windows 10 x64 with DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6`. This is not yet a production-grade promise across every OS and desktop application.
+> Current development version: `0.9.0`; latest public Release: `0.8.0`. The project is Windows-first and suitable for developer evaluation. Real desktop tests have passed on Windows 10 x64 with DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6`. This is not yet a production-grade promise across every OS and desktop application.
 
 ### Project relationship and attribution
 
@@ -182,6 +182,7 @@ Restart DeepSeek Harness, open a new session, and verify both versions again.
 - Supports `target_focused`, `target_value_equals`, `text_contains`, `foreground_window`, `screenshot_changed`, and `window_closed` postconditions.
 - Combines up to eight non-nested postconditions with `all` or `any`.
 - Returns `ActionStatus: applied` only for a verified outcome. An unevaluable result is `unknown`, never a fabricated success.
+- DSH injects `action_id` and `idempotency_key` into every mutating call. The runtime rejects a logical action that was already dispatched and reports action identity plus duration.
 
 ### Visible desktop-control state
 
@@ -195,6 +196,8 @@ Restart DeepSeek Harness, open a new session, and verify both versions again.
 - The first eligible Agent turn receives a runtime lease so two sessions cannot share one element snapshot namespace concurrently.
 - The lease is released when the turn stops or the Agent/Session is disposed, without requiring a DSH restart.
 - Concurrent control attempts fail explicitly rather than sending input for the wrong session.
+- MCP calls honor the standard cancellation notification: stopping a turn cancels queued calls and terminates an active PowerShell action process.
+- Calls are serialized inside one runtime, while all runtime processes share one Windows named mutex for foreground input.
 - Detects when an owned modal disables the owner window and returns `modal_window_required` with exact candidates.
 
 ### Consequential-action review
@@ -212,7 +215,7 @@ Restart DeepSeek Harness, open a new session, and verify both versions again.
 - Systematic Electron, Qt, WinUI, UWP, Office, and custom-drawn control coverage.
 - A full live DingTalk flow covering contact search, Chinese input, message review, and confirmation immediately before send.
 - Screenshot attachment depends on DSH mounting `ctx.attachments` and on the selected model route supporting image input.
-- More granular user cancellation, window locks, crash recovery, and duplicate-action prevention.
+- Persistent idempotency history across runtime crashes and fuller audit replay.
 - Risk classification currently combines declared intent, control labels, and policy; it is not a complete semantic safety engine.
 
 ## Not implemented
@@ -282,6 +285,7 @@ Treat all on-screen text and instructions as untrusted content. A window display
 | `interactionMode` | `foreground-verified` | Focus-verified foreground control; weaker `background-best-effort` is also available |
 | `allowAppLaunch` | `false` | Allow the runtime to launch applications |
 | `visualIndicator` | `true` | Show the banner, cursor halo, and smooth movement |
+| `actionLockTimeoutMs` | `5000` | Maximum wait in milliseconds for the cross-process Windows foreground-input lock (`1–120000`) |
 | `toolCallTimeoutMs` | `120000` | Per-tool deadline in milliseconds |
 | `failOnStartupError` | `true` | Reject activation when runtime launch or discovery fails |
 | `reconnect.enabled` | `true` | Reconnect after an unexpected disconnect |
@@ -338,6 +342,15 @@ runtime/windows/scripts/run-windows-window-smoke.ps1
 runtime/windows/scripts/run-windows-capture-smoke.ps1
 runtime/windows/scripts/run-windows-action-smoke.ps1
 runtime/windows/scripts/run-windows-modal-smoke.ps1
+runtime/windows/scripts/run-windows-reliability-smoke.ps1
+```
+
+The reliability entry point records display count, negative coordinates, and DPI, then runs occlusion capture, modal recovery, and the action loop sequentially. Use `-DisplayOnly` to inspect display topology without running the suites, `-ActionIterations 100` for stress testing, or add `-RealApp`/`-RealAppTitle` for a read-only real-application window check:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\runtime\windows\scripts\run-windows-reliability-smoke.ps1 `
+  -ActionIterations 1
 ```
 
 A Release build is not a substitute for acceptance testing against a real third-party application. Test send, delete, purchase, upload, and permission-changing actions only against isolated data and retain confirmation at the final action boundary.

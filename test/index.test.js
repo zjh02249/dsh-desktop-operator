@@ -222,12 +222,14 @@ test('production automation scripts use application-agnostic filenames', () => {
 })
 
 test('release supply-chain workflow requires signing evidence, SBOM, provenance, and rollback verification', () => {
+  const build = readFileSync(new URL('../scripts/build-runtime.ps1', import.meta.url), 'utf8')
   const signing = readFileSync(new URL('../scripts/sign-windows-artifacts.ps1', import.meta.url), 'utf8')
   const sbom = readFileSync(new URL('../scripts/generate-sbom.ps1', import.meta.url), 'utf8')
   const rollback = readFileSync(new URL('../scripts/verify-dsh-upgrade-rollback.ps1', import.meta.url), 'utf8')
   const release = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
 
   assert.match(signing, /WINDOWS_SIGNING_PFX_BASE64/)
+  assert.match(build, /Get-Command go[^\r\n]+Select-Object -First 1/)
   assert.match(signing, /Get-AuthenticodeSignature/)
   assert.match(signing, /\/fd/)
   assert.match(signing, /\/td/)

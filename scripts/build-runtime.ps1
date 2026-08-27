@@ -98,7 +98,7 @@ function Build-CaptureHelper {
 }
 
 if ([string]::IsNullOrWhiteSpace($GoExecutable)) {
-    $goCommand = Get-Command go -CommandType Application -ErrorAction SilentlyContinue
+    $goCommand = @(Get-Command go -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
     if ($null -eq $goCommand) {
         throw "Go was not found. Install Go 1.22 or newer, or pass -GoExecutable <absolute-path>."
     }

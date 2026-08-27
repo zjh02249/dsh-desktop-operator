@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-var version = "0.12.0"
+var version = "0.12.1"
 
 const (
 	mcpProtocolVersion = "2025-03-26"

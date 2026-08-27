@@ -225,6 +225,7 @@ jobs:
             & gh release create $tag `
               --verify-tag `
               --generate-notes `
+              --draft `
               --title $tag `
               --repo $repository
             if ($LASTEXITCODE -ne 0) {

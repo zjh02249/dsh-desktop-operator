@@ -2,6 +2,15 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。在 `1.0.0` 之前，DSH 预发布 API 或 Computer Use 工具协议的变化仍可能带来不兼容调整。
 
+## [0.12.1] - 2026-08-27
+
+### 发布修复
+
+- GitHub immutable release 现在先创建草稿、上传并核验全部资产，再转为正式发布，避免发布后资产被锁定。
+- 隔离升级/回滚门禁改用仓库已配置的 pnpm 启动 DSH CLI，并仅为测试工具自身安装必需的 peer graph；被测插件仍保持 peer 隔离。
+- Release 哈希计算改为直接使用 .NET SHA-256，不再依赖托管 PowerShell 环境的模块自动加载。
+- `v0.12.0` 因 immutable release 在资产上传前即被锁定，已由包含相同 v0.12 功能和发布修复的 `v0.12.1` 取代。
+
 ## [0.12.0] - 2026-08-27
 
 ### 供应链与发布
@@ -132,6 +141,7 @@
 - 提供一键测试、x64/arm64 构建、打包和归档完整性校验。
 - 建立长期 Codex Computer Use 能力对齐路线。
 
+[0.12.1]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.12.1
 [0.12.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.12.0
 [0.11.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.11.0
 [0.10.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.10.0

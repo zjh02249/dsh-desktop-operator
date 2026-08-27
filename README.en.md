@@ -2,7 +2,7 @@
 
 > 🌐 **Language / 语言:** [简体中文](README.md) | **English**
 
-[![Version](https://img.shields.io/badge/version-0.12.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.12.1-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20arm64-0078d4)](#platform-compatibility)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -12,7 +12,7 @@ The goal is more than basic mouse and keyboard emulation. This project is progre
 
 The core plugin contains no operation branch, control ID, or contact tied to a specific desktop application. Real product names are replaceable quality-matrix data and compatibility evidence only; the messaging-flow acceptance runner receives its application, window, and control selectors explicitly from the caller.
 
-> Current development version: `0.12.0`; see [Releases](https://github.com/zjh02249/dsh-desktop-operator/releases) for publication status. The project is Windows-first and suitable for developer evaluation. Real desktop tests have passed on Windows 10 x64 with DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6`. This is not yet a production-grade promise across every OS and desktop application.
+> Current development version: `0.12.1`; see [Releases](https://github.com/zjh02249/dsh-desktop-operator/releases) for publication status. The project is Windows-first and suitable for developer evaluation. Real desktop tests have passed on Windows 10 x64 with DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6`. This is not yet a production-grade promise across every OS and desktop application.
 
 ### Project relationship and attribution
 
@@ -30,29 +30,29 @@ Download the latest package from [GitHub Releases](https://github.com/zjh02249/d
 dsh-desktop-operator-<version>.tgz
 ```
 
-For example, release `0.12.0` contains:
+For example, release `0.12.1` contains:
 
 ```text
-dsh-desktop-operator-0.12.0.tgz
+dsh-desktop-operator-0.12.1.tgz
 ```
 
 When building from source, the same archive is generated under:
 
 ```text
-artifacts/package/dsh-desktop-operator-0.12.0.tgz
+artifacts/package/dsh-desktop-operator-0.12.1.tgz
 ```
 
 ### 2. Install it into the DSH Web Profile
 
 ```powershell
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.1.tgz"
 ```
 
 If `dsh` is not on `PATH`, call the CLI bundled with DeepSeek Harness:
 
 ```powershell
 $DshCli = "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js"
-node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
+node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.1.tgz"
 ```
 
 ### 3. Mount it in an Agent Preset
@@ -105,7 +105,7 @@ If `@valkia/dsh-plugin-computer-use` was installed previously, remove the old ID
 
 ```powershell
 dsh plugin --profile web remove '@valkia/dsh-plugin-computer-use'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.1.tgz"
 ```
 
 ### Upgrade an existing `dsh-desktop-operator` installation
@@ -114,7 +114,7 @@ DSH/pnpm may reuse a cached local archive with the same filename. Remove the ins
 
 ```powershell
 dsh plugin --profile web remove 'dsh-desktop-operator'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.1.tgz"
 ```
 
 Restart DeepSeek Harness, open a new session, and verify both versions again.

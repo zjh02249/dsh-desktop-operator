@@ -2,7 +2,7 @@
 
 > 🌐 **语言切换 / Language:** **简体中文** | [English](README.en.md)
 
-[![Version](https://img.shields.io/badge/version-0.12.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.12.1-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20arm64-0078d4)](#系统兼容性)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -12,7 +12,7 @@
 
 核心插件不包含面向某个具体桌面程序的操作分支、控件 ID 或联系人。真实应用名称只作为可替换的质量矩阵数据和兼容性证据；消息流程验收器由调用方显式传入应用、窗口与控件选择器。
 
-> 当前开发版本：`0.12.0`；公开发布状态以 [Releases](https://github.com/zjh02249/dsh-desktop-operator/releases) 为准。项目 Windows-first，可供开发者试用。已在 Windows 10 x64 与 DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6` 上完成真实桌面验证；尚不应视为跨系统、跨应用都达到生产级稳定性的最终版本。
+> 当前开发版本：`0.12.1`；公开发布状态以 [Releases](https://github.com/zjh02249/dsh-desktop-operator/releases) 为准。项目 Windows-first，可供开发者试用。已在 Windows 10 x64 与 DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6` 上完成真实桌面验证；尚不应视为跨系统、跨应用都达到生产级稳定性的最终版本。
 
 ### 项目关系与归属
 
@@ -30,29 +30,29 @@
 dsh-desktop-operator-<版本号>.tgz
 ```
 
-例如 `0.12.0` 对应：
+例如 `0.12.1` 对应：
 
 ```text
-dsh-desktop-operator-0.12.0.tgz
+dsh-desktop-operator-0.12.1.tgz
 ```
 
 如果你刚从源码构建，安装包位于：
 
 ```text
-artifacts/package/dsh-desktop-operator-0.12.0.tgz
+artifacts/package/dsh-desktop-operator-0.12.1.tgz
 ```
 
 ### 2. 安装到 DSH Web Profile
 
 ```powershell
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.1.tgz"
 ```
 
 如果终端找不到 `dsh`，使用 DeepSeek Harness 自带的 DSH CLI：
 
 ```powershell
 $DshCli = "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js"
-node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
+node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.1.tgz"
 ```
 
 ### 3. 挂载到 Agent Preset
@@ -105,7 +105,7 @@ $PluginRoot = "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-desktop-opera
 
 ```powershell
 dsh plugin --profile web remove '@valkia/dsh-plugin-computer-use'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.1.tgz"
 ```
 
 ### 升级已有 `dsh-desktop-operator` 安装
@@ -114,7 +114,7 @@ DSH/pnpm 可能复用同名本地包缓存。升级时建议先移除旧包，�
 
 ```powershell
 dsh plugin --profile web remove 'dsh-desktop-operator'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.1.tgz"
 ```
 
 随后重启 DeepSeek Harness，并使用新会话重新验证版本。

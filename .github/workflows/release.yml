@@ -116,10 +116,23 @@ jobs:
           } | ForEach-Object {
             [pscustomobject]@{ tag = $_.tagName; version = [version]$_.tagName.Substring(1) }
           } | Sort-Object version -Descending)
-          if ($candidates.Count -eq 0) {
-            throw 'No previous stable release is available for upgrade/rollback verification.'
+          $previousTag = ''
+          foreach ($candidate in $candidates) {
+            $candidateJson = [string](& gh release view $candidate.tag --repo $repository --json assets)
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not inspect release assets for $($candidate.tag)."
+            }
+            $candidatePackages = @(($candidateJson | ConvertFrom-Json).assets | Where-Object {
+              $_.name -like 'dsh-desktop-operator-*.tgz'
+            })
+            if ($candidatePackages.Count -eq 1) {
+              $previousTag = $candidate.tag
+              break
+            }
           }
-          $previousTag = $candidates[0].tag
+          if ([string]::IsNullOrWhiteSpace($previousTag)) {
+            throw 'No previous stable release with exactly one plugin package is available for upgrade/rollback verification.'
+          }
           New-Item -ItemType Directory -Path artifacts/rollback-input -Force | Out-Null
           & gh release download $previousTag `
             --repo $repository `

@@ -247,6 +247,8 @@ test('release supply-chain workflow requires signing evidence, SBOM, provenance,
   assert.match(release, /pnpm --dir artifacts\/dsh-cli add/)
   assert.match(release, /--config\.auto-install-peers=true/)
   assert.doesNotMatch(release, /(?:^|\s)npm\s+install[\s\S]*@deepseek-ai\/dsh@/m)
+  assert.match(release, /gh release view \$candidate\.tag[^\r\n]+--json assets/)
+  assert.match(release, /candidatePackages\.Count -eq 1/)
   assert.match(release, /gh release create[\s\S]*--draft[\s\S]*gh release upload[\s\S]*gh release edit[^\r\n]+--draft=false/)
   assert.doesNotMatch(`${signing}\n${sbom}\n${release}`, /Get-FileHash/)
   assert.match(signing, /System\.Security\.Cryptography\.SHA256/)

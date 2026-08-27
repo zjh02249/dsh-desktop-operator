@@ -101,28 +101,49 @@ try {
             '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}',
             '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
         )
-        $previousIndicatorSetting = [Environment]::GetEnvironmentVariable(
-            "OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR",
-            [EnvironmentVariableTarget]::Process
-        )
+        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $startInfo.FileName = $packagedRuntime
+        $startInfo.Arguments = "mcp"
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+        $startInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+        $startInfo.EnvironmentVariables["OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR"] = "false"
+        $mcpProcess = New-Object System.Diagnostics.Process
+        $mcpProcess.StartInfo = $startInfo
+        $mcpStarted = $false
+        $rawOutput = ""
         try {
-            [Environment]::SetEnvironmentVariable(
-                "OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR",
-                "false",
-                [EnvironmentVariableTarget]::Process
-            )
-            $rawResponses = (($mcpRequests -join "`n") + "`n") | & $packagedRuntime mcp
-            $mcpExitCode = $LASTEXITCODE
+            if (-not $mcpProcess.Start()) { throw "Could not start the packaged MCP runtime." }
+            $mcpStarted = $true
+            $stdoutTask = $mcpProcess.StandardOutput.ReadToEndAsync()
+            $stderrTask = $mcpProcess.StandardError.ReadToEndAsync()
+            $mcpProcess.StandardInput.Write(($mcpRequests -join "`n") + "`n")
+            $mcpProcess.StandardInput.Close()
+            if (-not $mcpProcess.WaitForExit(30000)) {
+                $mcpProcess.Kill()
+                $null = $mcpProcess.WaitForExit(5000)
+                throw "Packaged MCP runtime did not exit after stdin closed."
+            }
+            if (-not $stdoutTask.Wait(5000) -or -not $stderrTask.Wait(5000)) {
+                throw "Packaged MCP runtime output streams did not close after process exit."
+            }
+            $rawOutput = $stdoutTask.Result
+            $stderr = $stderrTask.Result.Trim()
+            if ($mcpProcess.ExitCode -ne 0) {
+                throw "Packaged MCP runtime exited with code $($mcpProcess.ExitCode). stderr: $stderr"
+            }
         } finally {
-            [Environment]::SetEnvironmentVariable(
-                "OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR",
-                $previousIndicatorSetting,
-                [EnvironmentVariableTarget]::Process
-            )
+            if ($mcpStarted -and -not $mcpProcess.HasExited) {
+                try { $mcpProcess.Kill() } catch {}
+                $null = $mcpProcess.WaitForExit(5000)
+            }
+            $mcpProcess.Dispose()
         }
-        if ($mcpExitCode -ne 0) {
-            throw "Packaged MCP runtime exited with code $mcpExitCode during archive verification."
-        }
+        $rawResponses = $rawOutput -split "`r?`n"
         $responses = @($rawResponses |
             Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
             ForEach-Object { $_ | ConvertFrom-Json })

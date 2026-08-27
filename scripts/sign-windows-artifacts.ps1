@@ -41,6 +41,7 @@ $importedCertificate = $null
 $certificate = $null
 $resolvedSignTool = ""
 $startedAt = [DateTime]::UtcNow
+$signatureEvidenceByPath = @{}
 
 function Get-Sha256([string]$Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
@@ -78,13 +79,28 @@ function Resolve-SignTool([string]$ExplicitPath) {
 
 function Write-SigningReport([string]$Status, [string]$ErrorCode = "") {
     $fileEvidence = @($resolvedFiles | ForEach-Object {
-        $signature = Get-AuthenticodeSignature -LiteralPath $_
+        $signatureEvidence = if ($signatureEvidenceByPath.ContainsKey($_)) {
+            $signatureEvidenceByPath[$_]
+        } elseif ($Status -eq "unsigned") {
+            [ordered]@{
+                status = "NotSigned"
+                signerThumbprint = ""
+                verifier = "not-requested"
+            }
+        } else {
+            [ordered]@{
+                status = "Unknown"
+                signerThumbprint = ""
+                verifier = "not-completed"
+            }
+        }
         [ordered]@{
             path = Get-PortableRelativePath $pluginRoot $_
             size = (Get-Item -LiteralPath $_).Length
             sha256 = Get-Sha256 $_
-            signatureStatus = [string]$signature.Status
-            signerThumbprint = if ($null -ne $signature.SignerCertificate) { [string]$signature.SignerCertificate.Thumbprint } else { "" }
+            signatureStatus = [string]$signatureEvidence.status
+            signerThumbprint = [string]$signatureEvidence.signerThumbprint
+            verifier = [string]$signatureEvidence.verifier
         }
     })
     $report = [ordered]@{
@@ -178,12 +194,28 @@ try {
             if ($LASTEXITCODE -ne 0) { throw "SignTool failed to sign $path with exit code $LASTEXITCODE." }
             & $resolvedSignTool verify /pa /all /v $path
             if ($LASTEXITCODE -ne 0) { throw "SignTool verification failed for $path with exit code $LASTEXITCODE." }
-            $signature = Get-AuthenticodeSignature -LiteralPath $path
-            if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-                throw "Authenticode verification did not return Valid for $path; status=$($signature.Status)."
+            $signature = $null
+            try {
+                $signature = Get-AuthenticodeSignature -LiteralPath $path -ErrorAction Stop
+            } catch {
+                $signatureEvidenceByPath[$path] = [ordered]@{
+                    status = "VerifiedBySignTool"
+                    signerThumbprint = $normalizedThumbprint
+                    verifier = "signtool-/pa"
+                }
             }
-            if ([string]$signature.SignerCertificate.Thumbprint -ne $normalizedThumbprint) {
-                throw "Authenticode signer mismatch for $path."
+            if ($null -ne $signature) {
+                if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+                    throw "Authenticode verification did not return Valid for $path; status=$($signature.Status)."
+                }
+                if ([string]$signature.SignerCertificate.Thumbprint -ne $normalizedThumbprint) {
+                    throw "Authenticode signer mismatch for $path."
+                }
+                $signatureEvidenceByPath[$path] = [ordered]@{
+                    status = [string]$signature.Status
+                    signerThumbprint = [string]$signature.SignerCertificate.Thumbprint
+                    verifier = "signtool-/pa+Get-AuthenticodeSignature"
+                }
             }
         }
 

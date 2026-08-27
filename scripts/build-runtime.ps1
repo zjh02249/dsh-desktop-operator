@@ -83,9 +83,9 @@ function Build-CaptureHelper {
     $compilerArguments = @("/nologo", "/target:library", "/optimize+", "/platform:anycpu", "/out:$captureHelperOutput")
     $compilerArguments += $references | ForEach-Object { "/reference:$_" }
     $compilerArguments += $captureHelperSource
-    & $compiler @compilerArguments
+    $compilerOutput = (& $compiler @compilerArguments 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $captureHelperOutput -PathType Leaf)) {
-        throw "Windows capture helper compilation failed with exit code $LASTEXITCODE."
+        throw "Windows capture helper compilation failed with exit code $LASTEXITCODE. Output: $compilerOutput"
     }
 
     return [ordered]@{

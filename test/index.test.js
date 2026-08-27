@@ -231,6 +231,8 @@ test('release supply-chain workflow requires signing evidence, SBOM, provenance,
   assert.match(signing, /WINDOWS_SIGNING_PFX_BASE64/)
   assert.match(build, /Get-Command go[^\r\n]+Select-Object -First 1/)
   assert.match(signing, /Get-AuthenticodeSignature/)
+  assert.match(signing, /VerifiedBySignTool/)
+  assert.match(build, /compilerOutput[^\r\n]+Out-String/)
   assert.match(signing, /\/fd/)
   assert.match(signing, /\/td/)
   assert.match(sbom, /CycloneDX/)

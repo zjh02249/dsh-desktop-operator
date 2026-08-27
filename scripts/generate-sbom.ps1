@@ -43,6 +43,17 @@ function Get-GeneratedTimestamp {
     return [DateTime]::UtcNow.ToString("o")
 }
 
+function Get-Sha256([string]$Path) {
+    $stream = [System.IO.File]::OpenRead($Path)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return (($sha256.ComputeHash($stream) | ForEach-Object { $_.ToString("X2") }) -join "")
+    } finally {
+        $sha256.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function New-DeterministicSerialNumber([string]$Seed) {
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
     try {
@@ -117,7 +128,7 @@ if (Test-Path -LiteralPath $resolvedManifestPath -PathType Leaf) {
         if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
             throw "Runtime artifact listed in the manifest is missing: $artifactPath"
         }
-        $actualHash = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToUpperInvariant()
+        $actualHash = Get-Sha256 $artifactPath
         if ($actualHash -ne ([string]$artifact.sha256).ToUpperInvariant()) {
             throw "Runtime artifact hash does not match the manifest: $artifactPath"
         }
@@ -181,6 +192,6 @@ New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
     format = "CycloneDX"
     specVersion = "1.6"
     path = $resolvedOutputPath
-    sha256 = (Get-FileHash -LiteralPath $resolvedOutputPath -Algorithm SHA256).Hash.ToUpperInvariant()
+    sha256 = Get-Sha256 $resolvedOutputPath
     componentCount = $allComponents.Count + 1
 } | ConvertTo-Json -Depth 4

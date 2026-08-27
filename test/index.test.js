@@ -244,6 +244,9 @@ test('release supply-chain workflow requires signing evidence, SBOM, provenance,
   assert.match(release, /attest-sbom@v4/)
   assert.match(release, /attestations:\s*write/)
   assert.match(release, /id-token:\s*write/)
+  assert.doesNotMatch(`${signing}\n${sbom}\n${release}`, /Get-FileHash/)
+  assert.match(signing, /System\.Security\.Cryptography\.SHA256/)
+  assert.match(sbom, /System\.Security\.Cryptography\.SHA256/)
 })
 
 test('Computer Use ownership is released when the owning Agent turn stops', async () => {

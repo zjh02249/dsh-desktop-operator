@@ -160,10 +160,20 @@ jobs:
           if ($sboms.Count -ne 1) {
             throw "Expected exactly one CycloneDX SBOM, found $($sboms.Count)."
           }
+          function Get-Sha256([string]$Path) {
+            $stream = [System.IO.File]::OpenRead($Path)
+            $sha256 = [System.Security.Cryptography.SHA256]::Create()
+            try {
+              return (($sha256.ComputeHash($stream) | ForEach-Object { $_.ToString("x2") }) -join "")
+            } finally {
+              $sha256.Dispose()
+              $stream.Dispose()
+            }
+          }
           $lines = Get-ChildItem artifacts/release -File |
             Sort-Object Name |
             ForEach-Object {
-              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              $hash = Get-Sha256 $_.FullName
               "$hash  $($_.Name)"
             }
           [System.IO.File]::WriteAllLines(

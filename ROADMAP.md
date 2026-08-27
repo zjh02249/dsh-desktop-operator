@@ -281,7 +281,7 @@ ActionResult
 任务：
 
 1. 插件与内置 runtime 使用同一个发布版本，避免产生第二个需要安装和升级的软件包。
-2. 同时生成 x64/arm64 Windows 二进制、SHA-256 manifest 和许可证 notices；正式发布前补 SBOM/provenance。
+2. 同时生成 x64/arm64 Windows 二进制、SHA-256 manifest、许可证 notices、CycloneDX SBOM、签名状态与 GitHub build provenance；此供应链基线已在 `0.12.0` 落地。
 3. DSH 插件使用 canary → opt-in preset → default preset 三阶段灰度。
 4. 保留上一稳定插件包，以整包版本回退；`runtimeExecutable` 只用于诊断，不作为生产部署结构。
 5. 使用 `runtime/upstream.json` 记录审核过的上游提交；临时同步 checkout 归档后仍可按提交重新获取，不形成运行时依赖。

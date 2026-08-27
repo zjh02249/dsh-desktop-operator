@@ -8,6 +8,8 @@ param(
 $ErrorActionPreference = "Stop"
 $pluginRoot = Split-Path -Parent $PSScriptRoot
 $buildScript = Join-Path $PSScriptRoot "build-runtime.ps1"
+$signingScript = Join-Path $PSScriptRoot "sign-windows-artifacts.ps1"
+$sbomScript = Join-Path $PSScriptRoot "generate-sbom.ps1"
 $package = Get-Content -Raw -LiteralPath (Join-Path $pluginRoot "package.json") | ConvertFrom-Json
 $architectures = @("amd64", "arm64")
 $buildArguments = @{ Architecture = $architectures }
@@ -28,6 +30,21 @@ if (-not [string]::IsNullOrWhiteSpace($GoExecutable)) {
 
 & $buildScript @buildArguments
 if ($LASTEXITCODE -ne 0) { throw "Runtime build failed with exit code $LASTEXITCODE." }
+
+$runtimeManifestPath = Join-Path $pluginRoot "runtime\bin\runtime-manifest.json"
+$runtimeFiles = @(
+    (Join-Path $pluginRoot "runtime\bin\win32-x64\open-computer-use.exe"),
+    (Join-Path $pluginRoot "runtime\bin\win32-arm64\open-computer-use.exe")
+)
+$requireSigning = [string]$env:WINDOWS_SIGNING_REQUIRED -match "^(1|true|yes)$"
+$signingOutput = (& $signingScript `
+    -Files $runtimeFiles `
+    -ReportPath "artifacts\security\windows-signing-report.json" `
+    -RuntimeManifestPath $runtimeManifestPath `
+    -RequireSigning:$requireSigning | Out-String)
+$signingReport = $signingOutput | ConvertFrom-Json
+$sbomOutput = (& $sbomScript | Out-String)
+$sbomReport = $sbomOutput | ConvertFrom-Json
 
 Push-Location $pluginRoot
 try {
@@ -61,6 +78,9 @@ try {
         "package/README.en.md",
         "package/CHANGELOG.md",
         "package/quality/windows-app-matrix.json",
+        "package/scripts/generate-sbom.ps1",
+        "package/scripts/sign-windows-artifacts.ps1",
+        "package/scripts/verify-dsh-upgrade-rollback.ps1",
         "package/scripts/verify-windows-host.ps1",
         "package/runtime/bin/runtime-manifest.json",
         "package/runtime/bin/win32-x64/open-computer-use.exe",
@@ -159,6 +179,17 @@ try {
         runtimeVersion = $runtimeVersion.Trim()
         mcpToolCount = $toolNames.Count
         coordinateSelfTest = $coordinateSelfTest
+        signing = [ordered]@{
+            status = [string]$signingReport.status
+            report = [System.IO.Path]::GetFullPath((Join-Path $pluginRoot "artifacts\security\windows-signing-report.json"))
+        }
+        sbom = [ordered]@{
+            format = [string]$sbomReport.format
+            specVersion = [string]$sbomReport.specVersion
+            path = [string]$sbomReport.path
+            sha256 = [string]$sbomReport.sha256
+            componentCount = [int]$sbomReport.componentCount
+        }
     } | ConvertTo-Json -Depth 4
 } finally {
     Pop-Location

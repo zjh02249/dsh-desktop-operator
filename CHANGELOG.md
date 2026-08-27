@@ -2,6 +2,22 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。在 `1.0.0` 之前，DSH 预发布 API 或 Computer Use 工具协议的变化仍可能带来不兼容调整。
 
+## [0.12.0] - 2026-08-27
+
+### 供应链与发布
+
+- 新增 Windows Authenticode 签名入口，支持 GitHub Secrets 注入 PFX 或使用证书指纹；签名后同时执行 SignTool `/pa` 验证和 `Get-AuthenticodeSignature` 验证，并刷新 runtime manifest 哈希。
+- 未配置维护者证书时不伪造成功：继续生成可测试的未签名包，同时发布机器可读 `windows-signing-report.json`；设置 `WINDOWS_SIGNING_REQUIRED=true` 可让发布失败关闭。
+- 新增 CycloneDX 1.6 SBOM，覆盖完整 npm 生产依赖图和 x64/arm64 runtime 文件哈希；Release 工作流使用 GitHub 官方 action 生成 build provenance 与 SBOM attestation。
+- 新增隔离 DSH Profile 验收，在独立 `DSH_HOME` 中执行上一稳定版 → 当前版 → 上一稳定版，并核对插件版本、原生 runtime 版本和唯一依赖绑定。
+- Release 资产扩展为插件包、双架构 runtime、manifest、SBOM、签名状态、升级/回滚报告和统一 SHA-256 校验文件。
+
+### 验证与边界
+
+- 本地主机没有代码签名证书和 SignTool，因此 `0.12.0` 本地产物的真实状态是 `unsigned`；签名管线已实现，但不能把本次本地构建描述为已签名。
+- 本地 CycloneDX SBOM 包含 99 个组件且依赖引用全部闭合；`0.11.0 → 0.12.0 → 0.11.0` 的隔离升级/回滚通过。
+- 所有供应链脚本均按文件、依赖和版本工作，不含任何桌面应用专用逻辑。
+
 ## [0.11.0] - 2026-08-27
 
 ### 新增
@@ -116,6 +132,7 @@
 - 提供一键测试、x64/arm64 构建、打包和归档完整性校验。
 - 建立长期 Codex Computer Use 能力对齐路线。
 
+[0.12.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.12.0
 [0.11.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.11.0
 [0.10.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.10.0
 [0.9.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.9.0

@@ -2,7 +2,7 @@
 
 > 🌐 **语言切换 / Language:** **简体中文** | [English](README.en.md)
 
-[![Version](https://img.shields.io/badge/version-0.11.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.12.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20arm64-0078d4)](#系统兼容性)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -12,7 +12,7 @@
 
 核心插件不包含面向某个具体桌面程序的操作分支、控件 ID 或联系人。真实应用名称只作为可替换的质量矩阵数据和兼容性证据；消息流程验收器由调用方显式传入应用、窗口与控件选择器。
 
-> 当前开发版本：`0.11.0`；公开发布状态以 [Releases](https://github.com/zjh02249/dsh-desktop-operator/releases) 为准。项目 Windows-first，可供开发者试用。已在 Windows 10 x64 与 DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6` 上完成真实桌面验证；尚不应视为跨系统、跨应用都达到生产级稳定性的最终版本。
+> 当前开发版本：`0.12.0`；公开发布状态以 [Releases](https://github.com/zjh02249/dsh-desktop-operator/releases) 为准。项目 Windows-first，可供开发者试用。已在 Windows 10 x64 与 DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6` 上完成真实桌面验证；尚不应视为跨系统、跨应用都达到生产级稳定性的最终版本。
 
 ### 项目关系与归属
 
@@ -30,29 +30,29 @@
 dsh-desktop-operator-<版本号>.tgz
 ```
 
-例如 `0.11.0` 对应：
+例如 `0.12.0` 对应：
 
 ```text
-dsh-desktop-operator-0.11.0.tgz
+dsh-desktop-operator-0.12.0.tgz
 ```
 
 如果你刚从源码构建，安装包位于：
 
 ```text
-artifacts/package/dsh-desktop-operator-0.11.0.tgz
+artifacts/package/dsh-desktop-operator-0.12.0.tgz
 ```
 
 ### 2. 安装到 DSH Web Profile
 
 ```powershell
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
 ```
 
 如果终端找不到 `dsh`，使用 DeepSeek Harness 自带的 DSH CLI：
 
 ```powershell
 $DshCli = "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js"
-node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
+node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
 ```
 
 ### 3. 挂载到 Agent Preset
@@ -105,7 +105,7 @@ $PluginRoot = "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-desktop-opera
 
 ```powershell
 dsh plugin --profile web remove '@valkia/dsh-plugin-computer-use'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
 ```
 
 ### 升级已有 `dsh-desktop-operator` 安装
@@ -114,7 +114,7 @@ DSH/pnpm 可能复用同名本地包缓存。升级时建议先移除旧包，�
 
 ```powershell
 dsh plugin --profile web remove 'dsh-desktop-operator'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
 ```
 
 随后重启 DeepSeek Harness，并使用新会话重新验证版本。
@@ -233,7 +233,7 @@ dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
 - CAPTCHA、登录验证、安全校验或绕过操作系统/应用安全限制。
 - 剪贴板语义工具、文件拖放、系统文件选择器和 Office 专用高层工具。
 - 沙箱/虚拟机隔离、动作回滚、域名 allowlist 和完整审计回放。
-- macOS 签名、公证、Windows 代码签名、自动更新和公开 npm registry 发布。
+- macOS 签名/公证、应用内自动更新和公开 npm registry 发布。Windows Authenticode 流程已实现，但没有配置维护者证书的 Release 会明确标记为未签名，不能宣称已签名。
 
 长期路线见 [ROADMAP.md](ROADMAP.md)。
 
@@ -330,10 +330,11 @@ pnpm package:plugin
 
 1. 测试 vendored runtime 并执行 `go vet`；
 2. 构建 Windows x64 与 arm64 原生 runtime；
-3. 运行插件 Node 测试；
-4. 生成 `.tgz`；
-5. 解包检查 runtime、源码、许可证和必要工具；
-6. 启动打包后的 MCP runtime，验证版本与工具列表。
+3. 使用配置的 Authenticode 证书签名并验证二进制；未配置证书时生成明确的未签名报告；
+4. 生成 CycloneDX 1.6 SBOM；
+5. 运行插件 Node 测试并生成 `.tgz`；
+6. 解包检查 runtime、源码、许可证和必要工具；
+7. 启动打包后的 MCP runtime，验证版本、工具列表与坐标自检。
 
 若 Go 不在 PATH，可直接调用：
 
@@ -342,6 +343,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\package-plugin.ps1 `
   -GoExecutable "C:\path\to\go.exe"
 ```
+
+### Windows 签名与供应链配置
+
+发布工作流支持两种 Authenticode 证书来源：`WINDOWS_SIGNING_PFX_BASE64` + `WINDOWS_SIGNING_PFX_PASSWORD`，或已安装证书的 `WINDOWS_SIGNING_CERT_THUMBPRINT`。把仓库变量 `WINDOWS_SIGNING_REQUIRED` 设为 `true` 后，缺少证书、签名失败、时间戳失败或验签失败都会阻断 Release。
+
+未配置证书时，构建仍会生成开发者可测试的包，但 `windows-signing-report.json` 会明确记录 `unsigned`。这不等同于签名发布。SBOM、签名状态和升级/回滚报告位于 `artifacts/security/`；GitHub Release 还会附加官方 artifact attestation。
 
 ## 测试与验收范围
 
@@ -370,7 +377,8 @@ Release 构建不会声称替代真实应用验收。涉及发送消息、删除
 - 版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 - `main` 中的 `package.json` 首次出现新版本号时，GitHub Actions 会在 Windows runner 上重新测试和打包；全部通过后自动创建对应 `v*` 标签和 Release。
 - 仍可手动推送 `v*` 标签触发同一套发布流程；标签版本必须与 `package.json` 一致。
-- Release 自动附带 `.tgz`、两个架构的 runtime、manifest 和 SHA-256 校验文件。
+- Release 自动附带 `.tgz`、两个架构的 runtime、manifest、CycloneDX SBOM、签名状态报告、升级/回滚报告和 SHA-256 校验文件。
+- GitHub Actions 为发布制品生成 build provenance 和 SBOM attestation；每次发布还在隔离 `DSH_HOME` 中验证上一版 → 当前版 → 上一版。
 - 主分支的 backfill job 会为历史标签补建缺失的 GitHub Release 页面。
 
 维护者只需提交版本号、CHANGELOG 和文档后推送 `main`：
@@ -389,6 +397,9 @@ runtime/LICENSE.*            上游许可证
 runtime/THIRD_PARTY_*        第三方声明和溯源
 scripts/build-runtime.ps1    runtime 构建入口
 scripts/package-plugin.ps1   一键测试、构建、打包和校验
+scripts/generate-sbom.ps1    CycloneDX 1.6 SBOM
+scripts/sign-windows-artifacts.ps1  Authenticode 签名与验签
+scripts/verify-dsh-upgrade-rollback.ps1  隔离升级/回滚验收
 test/                        插件测试
 .github/workflows/           CI 与 GitHub Releases 自动化
 ROADMAP.md                   长期 Codex 能力对齐路线

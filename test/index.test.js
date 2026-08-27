@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import vm from 'node:vm'
@@ -205,6 +205,41 @@ test('COMPUTER_USE_PROMPT preserves v2, fallback, focus, and confirmation guidan
   assert.match(COMPUTER_USE_PROMPT, /verify the target window still has focus before typing/)
   assert.match(COMPUTER_USE_PROMPT, /confirmation immediately before the final high-risk action/)
   assert.match(COMPUTER_USE_PROMPT, /re-observe before acting whenever a result is missing, ambiguous, or unknown/)
+})
+
+test('production automation scripts use application-agnostic filenames', () => {
+  const sourceDirectories = [
+    new URL('../scripts/', import.meta.url),
+    new URL('../runtime/windows/scripts/', import.meta.url),
+  ]
+  const applicationSpecificName = /dingtalk|office|wps|electron|qt|zcode/i
+  for (const directory of sourceDirectories) {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile()) continue
+      assert.doesNotMatch(entry.name, applicationSpecificName)
+    }
+  }
+})
+
+test('release supply-chain workflow requires signing evidence, SBOM, provenance, and rollback verification', () => {
+  const signing = readFileSync(new URL('../scripts/sign-windows-artifacts.ps1', import.meta.url), 'utf8')
+  const sbom = readFileSync(new URL('../scripts/generate-sbom.ps1', import.meta.url), 'utf8')
+  const rollback = readFileSync(new URL('../scripts/verify-dsh-upgrade-rollback.ps1', import.meta.url), 'utf8')
+  const release = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
+
+  assert.match(signing, /WINDOWS_SIGNING_PFX_BASE64/)
+  assert.match(signing, /Get-AuthenticodeSignature/)
+  assert.match(signing, /\/fd/)
+  assert.match(signing, /\/td/)
+  assert.match(sbom, /CycloneDX/)
+  assert.match(sbom, /specVersion.*1\.6/)
+  assert.match(sbom, /pnpm list --prod/)
+  assert.match(rollback, /DSH_HOME/)
+  assert.match(rollback, /previous.*current.*previous/is)
+  assert.match(release, /attest-build-provenance@v4/)
+  assert.match(release, /attest-sbom@v4/)
+  assert.match(release, /attestations:\s*write/)
+  assert.match(release, /id-token:\s*write/)
 })
 
 test('Computer Use ownership is released when the owning Agent turn stops', async () => {

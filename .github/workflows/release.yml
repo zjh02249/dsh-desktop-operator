@@ -8,8 +8,7 @@ on:
       - 'v*'
   workflow_dispatch:
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: release-${{ github.repository }}
@@ -20,6 +19,10 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
     runs-on: windows-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -70,7 +73,7 @@ jobs:
       - uses: actions/setup-go@v5
         if: steps.release.outputs.should_release == 'true'
         with:
-          go-version: '1.24.x'
+          go-version: '1.27.x'
           cache-dependency-path: runtime/windows/go.mod
 
       - run: pnpm install --frozen-lockfile
@@ -79,9 +82,66 @@ jobs:
       - name: Test, build, and package
         if: steps.release.outputs.should_release == 'true'
         shell: pwsh
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+          WINDOWS_SIGNING_CERT_THUMBPRINT: ${{ secrets.WINDOWS_SIGNING_CERT_THUMBPRINT }}
+          WINDOWS_SIGNING_REQUIRED: ${{ vars.WINDOWS_SIGNING_REQUIRED }}
         run: pnpm package:plugin
 
+      - name: Verify isolated DSH upgrade and rollback
+        if: steps.release.outputs.should_release == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $currentTag = '${{ steps.release.outputs.tag }}'
+          $repository = '${{ github.repository }}'
+          New-Item -ItemType Directory -Path artifacts/dsh-cli -Force | Out-Null
+          & npm install `
+            --prefix artifacts/dsh-cli `
+            --ignore-scripts `
+            --no-audit `
+            --no-fund `
+            --save-exact `
+            '@deepseek-ai/dsh@0.1.0-rc.6'
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not install the isolated DSH CLI used by the compatibility test.'
+          }
+          $dshCliPath = Resolve-Path 'artifacts/dsh-cli/node_modules/@deepseek-ai/dsh/lib/bin.js'
+          $releasesJson = [string](& gh release list --repo $repository --limit 100 --json tagName,isDraft,isPrerelease)
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not enumerate previous releases.'
+          }
+          $candidates = @($releasesJson | ConvertFrom-Json | Where-Object {
+            -not $_.isDraft -and -not $_.isPrerelease -and $_.tagName -ne $currentTag -and $_.tagName -match '^v\d+\.\d+\.\d+$'
+          } | ForEach-Object {
+            [pscustomobject]@{ tag = $_.tagName; version = [version]$_.tagName.Substring(1) }
+          } | Sort-Object version -Descending)
+          if ($candidates.Count -eq 0) {
+            throw 'No previous stable release is available for upgrade/rollback verification.'
+          }
+          $previousTag = $candidates[0].tag
+          New-Item -ItemType Directory -Path artifacts/rollback-input -Force | Out-Null
+          & gh release download $previousTag `
+            --repo $repository `
+            --pattern 'dsh-desktop-operator-*.tgz' `
+            --dir artifacts/rollback-input
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not download the plugin package from $previousTag."
+          }
+          $previousPackages = @(Get-ChildItem artifacts/rollback-input -Filter '*.tgz' -File)
+          $currentPackages = @(Get-ChildItem artifacts/package -Filter '*.tgz' -File)
+          if ($previousPackages.Count -ne 1 -or $currentPackages.Count -ne 1) {
+            throw "Expected one previous and one current package; found $($previousPackages.Count) and $($currentPackages.Count)."
+          }
+          & ./scripts/verify-dsh-upgrade-rollback.ps1 `
+            -PreviousPackagePath $previousPackages[0].FullName `
+            -CurrentPackagePath $currentPackages[0].FullName `
+            -DshCliPath $dshCliPath
+
       - name: Prepare release assets and checksums
+        id: assets
         if: steps.release.outputs.should_release == 'true'
         shell: pwsh
         run: |
@@ -95,6 +155,11 @@ jobs:
           Copy-Item runtime/bin/win32-x64/open-computer-use.exe artifacts/release/open-computer-use-win32-x64.exe
           Copy-Item runtime/bin/win32-arm64/open-computer-use.exe artifacts/release/open-computer-use-win32-arm64.exe
           Copy-Item runtime/bin/runtime-manifest.json artifacts/release/runtime-manifest.json
+          Copy-Item artifacts/security/*.json artifacts/release/
+          $sboms = @(Get-ChildItem artifacts/release -Filter '*.cdx.json' -File)
+          if ($sboms.Count -ne 1) {
+            throw "Expected exactly one CycloneDX SBOM, found $($sboms.Count)."
+          }
           $lines = Get-ChildItem artifacts/release -File |
             Sort-Object Name |
             ForEach-Object {
@@ -106,6 +171,21 @@ jobs:
             $lines,
             [System.Text.UTF8Encoding]::new($false)
           )
+          "package_path=artifacts/release/$($package.Name)" >> $env:GITHUB_OUTPUT
+          "sbom_path=artifacts/release/$($sboms[0].Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Attest release build provenance
+        if: steps.release.outputs.should_release == 'true'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: artifacts/release/*
+
+      - name: Attest plugin SBOM
+        if: steps.release.outputs.should_release == 'true'
+        uses: actions/attest-sbom@v4
+        with:
+          subject-path: ${{ steps.assets.outputs.package_path }}
+          sbom-path: ${{ steps.assets.outputs.sbom_path }}
 
       - uses: actions/upload-artifact@v4
         if: steps.release.outputs.should_release == 'true'
@@ -179,6 +259,8 @@ jobs:
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:

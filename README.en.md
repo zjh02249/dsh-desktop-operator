@@ -2,7 +2,7 @@
 
 > 🌐 **Language / 语言:** [简体中文](README.md) | **English**
 
-[![Version](https://img.shields.io/badge/version-0.11.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.12.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20arm64-0078d4)](#platform-compatibility)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -12,7 +12,7 @@ The goal is more than basic mouse and keyboard emulation. This project is progre
 
 The core plugin contains no operation branch, control ID, or contact tied to a specific desktop application. Real product names are replaceable quality-matrix data and compatibility evidence only; the messaging-flow acceptance runner receives its application, window, and control selectors explicitly from the caller.
 
-> Current development version: `0.11.0`; see [Releases](https://github.com/zjh02249/dsh-desktop-operator/releases) for publication status. The project is Windows-first and suitable for developer evaluation. Real desktop tests have passed on Windows 10 x64 with DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6`. This is not yet a production-grade promise across every OS and desktop application.
+> Current development version: `0.12.0`; see [Releases](https://github.com/zjh02249/dsh-desktop-operator/releases) for publication status. The project is Windows-first and suitable for developer evaluation. Real desktop tests have passed on Windows 10 x64 with DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6`. This is not yet a production-grade promise across every OS and desktop application.
 
 ### Project relationship and attribution
 
@@ -30,29 +30,29 @@ Download the latest package from [GitHub Releases](https://github.com/zjh02249/d
 dsh-desktop-operator-<version>.tgz
 ```
 
-For example, release `0.11.0` contains:
+For example, release `0.12.0` contains:
 
 ```text
-dsh-desktop-operator-0.11.0.tgz
+dsh-desktop-operator-0.12.0.tgz
 ```
 
 When building from source, the same archive is generated under:
 
 ```text
-artifacts/package/dsh-desktop-operator-0.11.0.tgz
+artifacts/package/dsh-desktop-operator-0.12.0.tgz
 ```
 
 ### 2. Install it into the DSH Web Profile
 
 ```powershell
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
 ```
 
 If `dsh` is not on `PATH`, call the CLI bundled with DeepSeek Harness:
 
 ```powershell
 $DshCli = "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js"
-node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
+node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
 ```
 
 ### 3. Mount it in an Agent Preset
@@ -105,7 +105,7 @@ If `@valkia/dsh-plugin-computer-use` was installed previously, remove the old ID
 
 ```powershell
 dsh plugin --profile web remove '@valkia/dsh-plugin-computer-use'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
 ```
 
 ### Upgrade an existing `dsh-desktop-operator` installation
@@ -114,7 +114,7 @@ DSH/pnpm may reuse a cached local archive with the same filename. Remove the ins
 
 ```powershell
 dsh plugin --profile web remove 'dsh-desktop-operator'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.11.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.12.0.tgz"
 ```
 
 Restart DeepSeek Harness, open a new session, and verify both versions again.
@@ -235,7 +235,7 @@ Restart DeepSeek Harness, open a new session, and verify both versions again.
 - CAPTCHA handling, authentication bypass, or circumvention of application/OS security boundaries.
 - Semantic clipboard tools, file drag-and-drop, system file-picker tools, or Office-specific high-level actions.
 - VM/sandbox isolation, action rollback, domain allowlists, or complete audit replay.
-- Windows code signing, macOS signing/notarization, automatic updates, or public npm registry publishing.
+- macOS signing/notarization, in-app automatic updates, or public npm registry publishing. The Windows Authenticode pipeline is implemented, but a release without a maintainer certificate is explicitly reported as unsigned and must not be represented as signed.
 
 See [ROADMAP.md](ROADMAP.md) for the longer-term Codex Computer Use parity plan.
 
@@ -332,10 +332,11 @@ pnpm package:plugin
 
 1. test the vendored runtime and run `go vet`;
 2. build Windows x64 and arm64 binaries;
-3. run the Node plugin tests;
-4. create the `.tgz` archive;
-5. unpack it and verify the runtime, source, licenses, and required tools;
-6. start the packaged MCP runtime and verify its version and tool list.
+3. sign and verify binaries with a configured Authenticode certificate, or emit an explicit unsigned report when no certificate is configured;
+4. generate a CycloneDX 1.6 SBOM;
+5. run the Node plugin tests and create the `.tgz` archive;
+6. unpack it and verify the runtime, source, licenses, and required tools;
+7. start the packaged MCP runtime and verify its version, tool list, and coordinate self-test.
 
 If Go is not on `PATH`, call the script directly:
 
@@ -344,6 +345,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\package-plugin.ps1 `
   -GoExecutable "C:\path\to\go.exe"
 ```
+
+### Windows signing and supply-chain configuration
+
+The release workflow accepts either `WINDOWS_SIGNING_PFX_BASE64` plus `WINDOWS_SIGNING_PFX_PASSWORD`, or `WINDOWS_SIGNING_CERT_THUMBPRINT` for an already installed certificate. Set the repository variable `WINDOWS_SIGNING_REQUIRED` to `true` to fail the Release when the certificate is absent or signing, timestamping, or verification fails.
+
+Without a certificate, the build still emits a developer-testable package, while `windows-signing-report.json` explicitly records `unsigned`; this is not a signed release. SBOM, signing status, and upgrade/rollback evidence are generated under `artifacts/security/`, and GitHub Releases also receive official artifact attestations.
 
 ## Test and acceptance scope
 
@@ -372,7 +379,8 @@ A Release build is not a substitute for acceptance testing against a real third-
 - See [CHANGELOG.md](CHANGELOG.md) for version history.
 - When `package.json` first contains a new version on `main`, GitHub Actions runs a fresh test and Windows x64/arm64 build, then creates the matching `v*` tag and Release only after those checks pass.
 - A manually pushed `v*` tag can still trigger the same release path; the tag must match `package.json`.
-- The Release receives the plugin `.tgz`, standalone runtimes, manifest, and SHA-256 checksums.
+- The Release receives the plugin `.tgz`, standalone runtimes, manifest, CycloneDX SBOM, signing-status report, upgrade/rollback report, and SHA-256 checksums.
+- GitHub Actions emits build-provenance and SBOM attestations and verifies previous → current → previous in an isolated `DSH_HOME` for every release.
 - The main-branch backfill job creates missing GitHub Release pages for historical version tags.
 
 The maintainer only commits the version, CHANGELOG, and docs before pushing `main`:
@@ -391,6 +399,9 @@ runtime/LICENSE.*            upstream licenses
 runtime/THIRD_PARTY_*        third-party notices and provenance
 scripts/build-runtime.ps1    native runtime build entry point
 scripts/package-plugin.ps1   test/build/package/archive verification
+scripts/generate-sbom.ps1    CycloneDX 1.6 SBOM
+scripts/sign-windows-artifacts.ps1  Authenticode signing and verification
+scripts/verify-dsh-upgrade-rollback.ps1  isolated upgrade/rollback acceptance
 test/                        plugin tests
 .github/workflows/           CI and GitHub Releases automation
 ROADMAP.md                   long-term Codex capability plan

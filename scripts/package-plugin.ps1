@@ -80,7 +80,6 @@ try {
     }
 
     $verificationRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-computer-use-package-" + [guid]::NewGuid().ToString("N"))
-    $mcpProcess = $null
     try {
         New-Item -ItemType Directory -Path $verificationRoot | Out-Null
         & $tar.Source -xf $archive.FullName -C $verificationRoot
@@ -97,53 +96,48 @@ try {
             throw "Packaged runtime version mismatch. Expected $($package.version), received '$runtimeVersion'."
         }
 
-        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $startInfo.FileName = $packagedRuntime
-        $startInfo.Arguments = "mcp"
-        $startInfo.UseShellExecute = $false
-        $startInfo.CreateNoWindow = $true
-        $startInfo.RedirectStandardInput = $true
-        $startInfo.RedirectStandardOutput = $true
-        $startInfo.RedirectStandardError = $true
-        $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
-        $startInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
-        $mcpProcess = New-Object System.Diagnostics.Process
-        $mcpProcess.StartInfo = $startInfo
-        if (-not $mcpProcess.Start()) { throw "Could not start the packaged MCP runtime." }
-        $stderrTask = $mcpProcess.StandardError.ReadToEndAsync()
-
-        function Invoke-PackagedMcpRequest([string]$request, [int]$expectedId) {
-            $mcpProcess.StandardInput.WriteLine($request)
-            $mcpProcess.StandardInput.Flush()
-            for ($attempt = 1; $attempt -le 20; $attempt++) {
-                $readTask = $mcpProcess.StandardOutput.ReadLineAsync()
-                if (-not $readTask.Wait(30000)) {
-                    throw "Packaged MCP runtime timed out waiting for JSON-RPC response id $expectedId."
-                }
-                if ($null -eq $readTask.Result) {
-                    $stderr = if ($stderrTask.IsCompleted) { $stderrTask.Result.Trim() } else { "" }
-                    throw "Packaged MCP runtime closed stdout before JSON-RPC response id $expectedId. stderr: $stderr"
-                }
-                $response = $readTask.Result | ConvertFrom-Json
-                if ($response.id -ne $expectedId) { continue }
-                if ($null -ne $response.error) {
-                    throw "Packaged MCP runtime returned an error for JSON-RPC id $expectedId`: $($response.error | ConvertTo-Json -Compress)"
-                }
-                return $response
-            }
-            throw "Packaged MCP runtime did not return JSON-RPC response id $expectedId."
+        $mcpRequests = @(
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"package-verifier","version":"1"}}}',
+            '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}',
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+        )
+        $previousIndicatorSetting = [Environment]::GetEnvironmentVariable(
+            "OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR",
+            [EnvironmentVariableTarget]::Process
+        )
+        try {
+            [Environment]::SetEnvironmentVariable(
+                "OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR",
+                "false",
+                [EnvironmentVariableTarget]::Process
+            )
+            $rawResponses = (($mcpRequests -join "`n") + "`n") | & $packagedRuntime mcp
+            $mcpExitCode = $LASTEXITCODE
+        } finally {
+            [Environment]::SetEnvironmentVariable(
+                "OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR",
+                $previousIndicatorSetting,
+                [EnvironmentVariableTarget]::Process
+            )
         }
-
-        $initializeRequest = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"package-verifier","version":"1"}}}'
-        $initializedNotification = '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}'
-        $toolsRequest = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-        $initializeResponse = Invoke-PackagedMcpRequest $initializeRequest 1
+        if ($mcpExitCode -ne 0) {
+            throw "Packaged MCP runtime exited with code $mcpExitCode during archive verification."
+        }
+        $responses = @($rawResponses |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+            ForEach-Object { $_ | ConvertFrom-Json })
+        $initializeResponse = $responses | Where-Object { $_.id -eq 1 } | Select-Object -First 1
+        $toolsResponse = $responses | Where-Object { $_.id -eq 2 } | Select-Object -First 1
+        if ($null -eq $initializeResponse -or $null -eq $toolsResponse) {
+            $responseIds = @($responses | ForEach-Object { [string]$_.id }) -join ", "
+            throw "Packaged MCP runtime returned incomplete JSON-RPC responses. Received ids: $responseIds"
+        }
+        if ($null -ne $initializeResponse.error -or $null -ne $toolsResponse.error) {
+            throw "Packaged MCP runtime returned a JSON-RPC error during archive verification."
+        }
         if ($initializeResponse.result.protocolVersion -ne "2025-03-26") {
             throw "Packaged MCP runtime returned unexpected protocol version '$($initializeResponse.result.protocolVersion)'."
         }
-        $mcpProcess.StandardInput.WriteLine($initializedNotification)
-        $mcpProcess.StandardInput.Flush()
-        $toolsResponse = Invoke-PackagedMcpRequest $toolsRequest 2
         $toolNames = @($toolsResponse.result.tools | ForEach-Object { $_.name })
         $requiredTools = @("list_windows", "get_window", "activate_window", "get_window_state", "click", "type_text", "press_key", "set_value")
         $missingTools = @($requiredTools | Where-Object { $_ -notin $toolNames })
@@ -151,18 +145,6 @@ try {
             throw "Packaged MCP runtime is missing required tools: $($missingTools -join ', ')"
         }
     } finally {
-        if ($null -ne $mcpProcess) {
-            if (-not $mcpProcess.HasExited) {
-                try { $mcpProcess.StandardInput.Close() } catch {}
-                if (-not $mcpProcess.WaitForExit(3000)) {
-                    $mcpProcess.Kill()
-                    if (-not $mcpProcess.WaitForExit(5000)) {
-                        throw "Packaged MCP verifier did not exit after termination."
-                    }
-                }
-            }
-            $mcpProcess.Dispose()
-        }
         if (Test-Path -LiteralPath $verificationRoot) {
             for ($attempt = 1; $attempt -le 10; $attempt++) {
                 try {

@@ -121,8 +121,10 @@ try {
             if (-not $mcpProcess.Start()) { throw "Could not start the packaged MCP runtime." }
             $mcpStarted = $true
             $stderrTask = $mcpProcess.StandardError.ReadToEndAsync()
-            $mcpProcess.StandardInput.Write(($mcpRequests -join "`n") + "`n")
-            $mcpProcess.StandardInput.Close()
+            $mcpProcess.StandardInput.AutoFlush = $true
+            foreach ($request in $mcpRequests) {
+                $mcpProcess.StandardInput.WriteLine($request)
+            }
 
             $deadline = [DateTime]::UtcNow.AddSeconds(30)
             while ($true) {
@@ -149,6 +151,7 @@ try {
                 if ($null -ne $initializeResponse -and $null -ne $toolsResponse) { break }
             }
 
+            $mcpProcess.StandardInput.Close()
             if (-not $mcpProcess.HasExited) {
                 $mcpProcess.Kill()
                 $terminatedAfterVerification = $true
@@ -163,6 +166,7 @@ try {
             }
         } finally {
             if ($mcpStarted -and -not $mcpProcess.HasExited) {
+                try { $mcpProcess.StandardInput.Close() } catch {}
                 try { $mcpProcess.Kill() } catch {}
                 $null = $mcpProcess.WaitForExit(5000)
             }

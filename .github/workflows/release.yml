@@ -100,7 +100,7 @@ jobs:
           New-Item -ItemType Directory -Path artifacts/dsh-cli -Force | Out-Null
           & pnpm --dir artifacts/dsh-cli add `
             --ignore-scripts `
-            --config.auto-install-peers=false `
+            --config.auto-install-peers=true `
             --save-exact `
             '@deepseek-ai/dsh@0.1.0-rc.6'
           if ($LASTEXITCODE -ne 0) {

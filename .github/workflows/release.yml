@@ -98,11 +98,9 @@ jobs:
           $currentTag = '${{ steps.release.outputs.tag }}'
           $repository = '${{ github.repository }}'
           New-Item -ItemType Directory -Path artifacts/dsh-cli -Force | Out-Null
-          & npm install `
-            --prefix artifacts/dsh-cli `
+          & pnpm --dir artifacts/dsh-cli add `
             --ignore-scripts `
-            --no-audit `
-            --no-fund `
+            --config.auto-install-peers=false `
             --save-exact `
             '@deepseek-ai/dsh@0.1.0-rc.6'
           if ($LASTEXITCODE -ne 0) {

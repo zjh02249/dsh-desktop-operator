@@ -1,13 +1,13 @@
 /**
- * Package-owned invariant companion for `@valkia/dsh-plugin-computer-use`.
- * @module @valkia/dsh-plugin-computer-use/invariant
+ * Package-owned invariant companion for `dsh-desktop-operator`.
+ * @module dsh-desktop-operator/invariant
  */
 
 /* jscpd:ignore-start */
 import type { Context } from '@deepseek-ai/cordis'
 import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 
-const PACKAGE_NAME = '@valkia/dsh-plugin-computer-use'
+const PACKAGE_NAME = 'dsh-desktop-operator'
 
 /** Cordis companion plugin name. */
 export const name = 'computer-use-invariant'

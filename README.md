@@ -1,12 +1,12 @@
-# DeepSeek Harness Computer Use Plugin
+# DSH Desktop Operator
 
 > 🌐 **语言切换 / Language:** **简体中文** | [English](README.en.md)
 
-[![Version](https://img.shields.io/badge/version-0.8.0-blue)](https://github.com/zjh02249/dsh-plugin-computer-use/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.8.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20arm64-0078d4)](#系统兼容性)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-`@valkia/dsh-plugin-computer-use` 是一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) / DSH 的 Windows Computer Use、桌面自动化和 MCP 插件。它把经过适配的 Open Computer Use 原生运行时、DSH 桥接层、许可证和 Windows x64/arm64 二进制打进**一个插件包**，安装后不再依赖第二个项目或相邻源码目录。
+`dsh-desktop-operator` 是一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) / DSH 的 Windows Computer Use、桌面自动化和 MCP 插件。它把经过适配的 Open Computer Use 原生运行时、DSH 桥接层、许可证和 Windows x64/arm64 二进制打进**一个插件包**，安装后不再依赖第二个项目或相邻源码目录。
 
 项目目标不是简单模拟鼠标键盘，而是逐步复刻 Codex Computer Use 的关键工程能力：精确选择窗口、观察界面、优先使用无障碍元素、执行动作、验证结果、处理模态窗口、在敏感动作前确认，并让用户清楚看到电脑正在被控制。
 
@@ -16,41 +16,41 @@
 
 这是 [valkia/dsh-plugin-computer-use](https://github.com/valkia/dsh-plugin-computer-use) 的**独立维护增强衍生版**。原插件实现来自 DeepSeek Harness 相关工作；本仓库保留原始 MIT 许可证与 `Copyright (c) 2026 DeepSeek` 声明，并正式合并、持续改造了来自 [iFurySt/open-codex-computer-use](https://github.com/iFurySt/open-codex-computer-use) 的 Windows runtime。本仓库不是 DeepSeek 官方发行版。
 
-软件包 ID 暂时保留为 `@valkia/dsh-plugin-computer-use`，仅用于兼容已经存在的 DSH Agent Preset 和本机安装，不表示本仓库拥有或代表 GitHub 用户 `valkia`。若未来发布到公共 npm registry，应在一次明确的破坏性版本升级中切换到维护者自己的 package scope。
+当前产品使用独立的软件包 ID `dsh-desktop-operator`，不再使用原仓库的 `@valkia/dsh-plugin-computer-use` 标识。旧 ID 只会出现在来源说明和迁移命令中，不表示本仓库拥有或代表 GitHub 用户 `valkia`。
 
 ## 快速安装
 
 ### 1. 下载插件包
 
-从本仓库的 [Releases](https://github.com/zjh02249/dsh-plugin-computer-use/releases) 下载最新的：
+从本仓库的 [Releases](https://github.com/zjh02249/dsh-desktop-operator/releases) 下载最新的：
 
 ```text
-valkia-dsh-plugin-computer-use-<版本号>.tgz
+dsh-desktop-operator-<版本号>.tgz
 ```
 
 例如 `0.8.0` 对应：
 
 ```text
-valkia-dsh-plugin-computer-use-0.8.0.tgz
+dsh-desktop-operator-0.8.0.tgz
 ```
 
 如果你刚从源码构建，安装包位于：
 
 ```text
-artifacts/package/valkia-dsh-plugin-computer-use-0.8.0.tgz
+artifacts/package/dsh-desktop-operator-0.8.0.tgz
 ```
 
 ### 2. 安装到 DSH Web Profile
 
 ```powershell
-dsh plugin --profile web add "D:\Downloads\valkia-dsh-plugin-computer-use-0.8.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
 ```
 
 如果终端找不到 `dsh`，使用 DeepSeek Harness 自带的 DSH CLI：
 
 ```powershell
 $DshCli = "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js"
-node $DshCli plugin --profile web add "D:\Downloads\valkia-dsh-plugin-computer-use-0.8.0.tgz"
+node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
 ```
 
 ### 3. 挂载到 Agent Preset
@@ -59,7 +59,7 @@ node $DshCli plugin --profile web add "D:\Downloads\valkia-dsh-plugin-computer-u
 
 ```yaml
 - id: computer-use
-  name: '@valkia/dsh-plugin-computer-use'
+  name: 'dsh-desktop-operator'
   config:
     accessPolicy: allow
     highRiskActionPolicy: confirm
@@ -90,20 +90,29 @@ node $DshCli plugin --profile web add "D:\Downloads\valkia-dsh-plugin-computer-u
 ### 5. 核验安装版本
 
 ```powershell
-$PluginRoot = "$env:USERPROFILE\.dsh\profiles\web\node_modules\@valkia\dsh-plugin-computer-use"
+$PluginRoot = "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-desktop-operator"
 (Get-Content -Raw "$PluginRoot\package.json" | ConvertFrom-Json).version
 & "$PluginRoot\runtime\bin\win32-x64\open-computer-use.exe" --version
 ```
 
 两处版本都应与 Release 版本一致。
 
-### 升级已有安装
+### 从旧软件包迁移
+
+如果此前安装过 `@valkia/dsh-plugin-computer-use`，先移除旧 ID，再安装新的独立软件包，并把 Agent Preset 中的 `name` 改成 `dsh-desktop-operator`：
+
+```powershell
+dsh plugin --profile web remove '@valkia/dsh-plugin-computer-use'
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
+```
+
+### 升级已有 `dsh-desktop-operator` 安装
 
 DSH/pnpm 可能复用同名本地包缓存。升级时建议先移除旧包，再安装新的 `.tgz`：
 
 ```powershell
-dsh plugin --profile web remove '@valkia/dsh-plugin-computer-use'
-dsh plugin --profile web add "D:\Downloads\valkia-dsh-plugin-computer-use-0.8.0.tgz"
+dsh plugin --profile web remove 'dsh-desktop-operator'
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
 ```
 
 随后重启 DeepSeek Harness，并使用新会话重新验证版本。

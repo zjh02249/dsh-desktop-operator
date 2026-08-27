@@ -1,12 +1,12 @@
-# DeepSeek Harness Computer Use Plugin
+# DSH Desktop Operator
 
 > 🌐 **Language / 语言:** [简体中文](README.md) | **English**
 
-[![Version](https://img.shields.io/badge/version-0.8.0-blue)](https://github.com/zjh02249/dsh-plugin-computer-use/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.8.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20arm64-0078d4)](#platform-compatibility)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-`@valkia/dsh-plugin-computer-use` is a Windows Computer Use, desktop automation, and MCP plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) / DSH. It ships the adapted Open Computer Use native runtime, DSH bridge, licenses, and Windows x64/arm64 binaries in **one installable plugin package**. No separate runtime project or adjacent source checkout is required after installation.
+`dsh-desktop-operator` is a Windows Computer Use, desktop automation, and MCP plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) / DSH. It ships the adapted Open Computer Use native runtime, DSH bridge, licenses, and Windows x64/arm64 binaries in **one installable plugin package**. No separate runtime project or adjacent source checkout is required after installation.
 
 The goal is more than basic mouse and keyboard emulation. This project is progressively implementing the engineering foundations behind a Codex-like Computer Use experience: exact window selection, UI observation, accessibility-first targeting, action execution, post-action verification, modal recovery, confirmation before consequential actions, and an obvious visual indication while the computer is being controlled.
 
@@ -16,41 +16,41 @@ The goal is more than basic mouse and keyboard emulation. This project is progre
 
 This repository is an **independently maintained enhanced derivative** of [valkia/dsh-plugin-computer-use](https://github.com/valkia/dsh-plugin-computer-use). The original plugin implementation came from work related to DeepSeek Harness. This repository preserves its MIT license and `Copyright (c) 2026 DeepSeek` notice, and formally incorporates and continues to adapt the Windows runtime from [iFurySt/open-codex-computer-use](https://github.com/iFurySt/open-codex-computer-use). This is not an official DeepSeek release.
 
-The package ID remains `@valkia/dsh-plugin-computer-use` temporarily for compatibility with existing DSH Agent Presets and local installations. It does not mean that this repository owns or represents the GitHub user `valkia`. A future public npm release should move to the maintainer's own package scope in an explicit breaking version.
+The product now uses the independent package ID `dsh-desktop-operator` instead of the original repository's `@valkia/dsh-plugin-computer-use` identity. The old ID appears only in provenance and migration instructions; this repository does not own or represent the GitHub user `valkia`.
 
 ## Quick install
 
 ### 1. Download the plugin package
 
-Download the latest package from [GitHub Releases](https://github.com/zjh02249/dsh-plugin-computer-use/releases):
+Download the latest package from [GitHub Releases](https://github.com/zjh02249/dsh-desktop-operator/releases):
 
 ```text
-valkia-dsh-plugin-computer-use-<version>.tgz
+dsh-desktop-operator-<version>.tgz
 ```
 
 For example, release `0.8.0` contains:
 
 ```text
-valkia-dsh-plugin-computer-use-0.8.0.tgz
+dsh-desktop-operator-0.8.0.tgz
 ```
 
 When building from source, the same archive is generated under:
 
 ```text
-artifacts/package/valkia-dsh-plugin-computer-use-0.8.0.tgz
+artifacts/package/dsh-desktop-operator-0.8.0.tgz
 ```
 
 ### 2. Install it into the DSH Web Profile
 
 ```powershell
-dsh plugin --profile web add "D:\Downloads\valkia-dsh-plugin-computer-use-0.8.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
 ```
 
 If `dsh` is not on `PATH`, call the CLI bundled with DeepSeek Harness:
 
 ```powershell
 $DshCli = "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js"
-node $DshCli plugin --profile web add "D:\Downloads\valkia-dsh-plugin-computer-use-0.8.0.tgz"
+node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
 ```
 
 ### 3. Mount it in an Agent Preset
@@ -59,7 +59,7 @@ node $DshCli plugin --profile web add "D:\Downloads\valkia-dsh-plugin-computer-u
 
 ```yaml
 - id: computer-use
-  name: '@valkia/dsh-plugin-computer-use'
+  name: 'dsh-desktop-operator'
   config:
     accessPolicy: allow
     highRiskActionPolicy: confirm
@@ -90,20 +90,29 @@ List the current Windows desktop windows. Do not click or type anything.
 ### 5. Verify the installed version
 
 ```powershell
-$PluginRoot = "$env:USERPROFILE\.dsh\profiles\web\node_modules\@valkia\dsh-plugin-computer-use"
+$PluginRoot = "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-desktop-operator"
 (Get-Content -Raw "$PluginRoot\package.json" | ConvertFrom-Json).version
 & "$PluginRoot\runtime\bin\win32-x64\open-computer-use.exe" --version
 ```
 
 Both commands should report the same version as the selected GitHub Release.
 
-### Upgrade an existing installation
+### Migrate from the previous package ID
+
+If `@valkia/dsh-plugin-computer-use` was installed previously, remove the old ID, install the independent package, and change the Agent Preset `name` to `dsh-desktop-operator`:
+
+```powershell
+dsh plugin --profile web remove '@valkia/dsh-plugin-computer-use'
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
+```
+
+### Upgrade an existing `dsh-desktop-operator` installation
 
 DSH/pnpm may reuse a cached local archive with the same filename. Remove the installed package before adding an upgraded `.tgz`:
 
 ```powershell
-dsh plugin --profile web remove '@valkia/dsh-plugin-computer-use'
-dsh plugin --profile web add "D:\Downloads\valkia-dsh-plugin-computer-use-0.8.0.tgz"
+dsh plugin --profile web remove 'dsh-desktop-operator'
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.8.0.tgz"
 ```
 
 Restart DeepSeek Harness, open a new session, and verify both versions again.

@@ -1,4 +1,4 @@
-# 中文说明
+# DSH Desktop Operator 中文说明
 
 > 🌐 **语言切换 / Language:** [**简体中文**](README.md) | [English](README.en.md)
 

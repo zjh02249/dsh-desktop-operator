@@ -2,7 +2,7 @@
 
 审查日期：2026-08-27
 
-目标仓库：`zjh02249/dsh-plugin-computer-use`
+目标仓库：`zjh02249/dsh-desktop-operator`
 
 ## 结论
 
@@ -14,7 +14,9 @@
 - `windows computer use mcp`
 - `deepseek harness windows automation`
 
-但“精确仓库名”存在竞争：GitHub 已有原始仓库 [`valkia/dsh-plugin-computer-use`](https://github.com/valkia/dsh-plugin-computer-use)，并且目前对 `dsh-plugin-computer-use in:name` 的搜索会首先命中它。因此新仓库不能假设自己会因为同名而排在第一位。最重要的区分手段是：
+产品最终命名为 `dsh-desktop-operator`。审查时 GitHub 对 `dsh-desktop-operator in:name` 没有返回同名仓库，npm registry 也没有同名公开包；它与原始仓库 [`valkia/dsh-plugin-computer-use`](https://github.com/valkia/dsh-plugin-computer-use) 清楚区分。名称可用性仍只是审查时快照，正式创建仓库与未来 npm 发布时必须再次核验。
+
+最重要的识别手段是：
 
 1. 仓库 owner `zjh02249`；
 2. 明确说明这是独立维护的增强衍生版；
@@ -26,8 +28,9 @@
 
 | 场景 | 预计效果 |
 |---|---|
-| 用户已知道完整地址 `zjh02249/dsh-plugin-computer-use` | 很容易找到 |
-| 搜索 `dsh-plugin-computer-use` | 中等；会与原始同名仓库竞争 |
+| 用户已知道完整地址 `zjh02249/dsh-desktop-operator` | 很容易找到 |
+| 搜索 `dsh-desktop-operator` | 很好；审查时没有同名 GitHub 仓库 |
+| 搜索原始名称 `dsh-plugin-computer-use` | 不会直接命中新名称；依靠 description、Topics 和 README 中的项目关系补充关联 |
 | 搜索 `deepseek harness computer use` | 公开并完成 Topics 后较好 |
 | 搜索泛化词 `computer use` | 较弱；该词竞争范围很大 |
 | 通过 Topics 浏览 | 设置 Topics 后较好 |
@@ -83,7 +86,7 @@ GitHub 支持为公开仓库上传 Social Preview 图片；它主要影响仓库
 
 | 项目 | 当前状态 | 评价与处理 |
 |---|---|---|
-| 仓库名称 | `dsh-plugin-computer-use` | 核心词准确，但与原始仓库同名；通过 owner、描述和项目关系说明区分 |
+| 仓库名称 | `dsh-desktop-operator` | 审查时无同名 GitHub 仓库；独特、可扩展且不把未来平台限制为 Windows |
 | 仓库公开状态 | 尚未创建 | 创建为 public 后才可进入 GitHub 索引 |
 | GitHub Description | 已准备英文描述 | 同时包含 DeepSeek Harness、DSH、Windows Computer Use、desktop automation、UI Automation 和 MCP |
 | 中文 README | `README.md` 完整 | 顶部提供醒目的英文切换入口 |
@@ -100,7 +103,7 @@ GitHub 支持为公开仓库上传 Social Preview 图片；它主要影响仓库
 ## 推荐 GitHub Description
 
 ```text
-DeepSeek Harness / DSH plugin for safe Windows Computer Use, desktop automation, UI Automation, and MCP tools
+DSH Desktop Operator: safe Windows Computer Use, desktop automation, UI Automation, and MCP tools for DeepSeek Harness
 ```
 
 该描述短、准确，并覆盖普通 GitHub 搜索默认检查的 description 字段。它没有使用“full Codex parity”或“production ready”等当前无法证明的营销表述。
@@ -114,6 +117,7 @@ deepseek
 deepseek-harness
 dsh
 dsh-plugin
+desktop-operator
 computer-use
 desktop-automation
 desktop-control
@@ -135,11 +139,11 @@ open-computer-use
 GitHub 完成索引可能需要时间。发布并设置 Topics 后，应依次核验：
 
 ```text
-dsh-plugin-computer-use in:name
+dsh-desktop-operator in:name
 "DeepSeek Harness" "Computer Use" in:name,description,topics
 "desktop automation" dsh in:description,topics
 topic:deepseek-harness topic:computer-use
-zjh02249/dsh-plugin-computer-use
+zjh02249/dsh-desktop-operator
 ```
 
 还应检查：

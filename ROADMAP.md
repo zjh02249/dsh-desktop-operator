@@ -60,13 +60,13 @@ OpenAI 的 [Computer use 官方指南](https://developers.openai.com/api/docs/gu
 DeepSeek Harness Agent
         │
         ▼
-dsh-plugin-computer-use（策略与适配层）
+dsh-desktop-operator（策略与适配层）
   - session ownership / approval / confirmation
   - tool capability negotiation
   - prompt + attachment + lifecycle
         │ MCP stdio
         ▼
-dsh-plugin-computer-use/runtime/windows（原生桌面 runtime）
+dsh-desktop-operator/runtime/windows（原生桌面 runtime）
   - Window Registry
   - Capture Engine
   - UIA Snapshot Engine

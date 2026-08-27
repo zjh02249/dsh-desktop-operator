@@ -22,4 +22,4 @@ jobs:
       - run: pnpm install --prod --frozen-lockfile
       - name: Verify committed package artifacts
         run: node -e "const fs=require('node:fs'); for (const f of ['lib/index.js','lib/index.d.ts','lib/invariant.js','lib/invariant.d.ts','cordis.patch.yml']) fs.accessSync(f)"
-      - run: pnpm pack --out /tmp/dsh-plugin-computer-use.tgz
+      - run: pnpm pack --out /tmp/dsh-desktop-operator.tgz

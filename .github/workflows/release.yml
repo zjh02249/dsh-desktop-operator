@@ -79,7 +79,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dsh-plugin-computer-use-${{ github.ref_name }}
+          name: dsh-desktop-operator-${{ github.ref_name }}
           path: artifacts/release/*
           if-no-files-found: error
 

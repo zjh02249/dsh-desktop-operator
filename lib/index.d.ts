@@ -3,7 +3,7 @@
  * Open Computer Use MCP server, registers its Codex-compatible tools through
  * `dsh-mcp-client`, gates real-desktop access, and clears transient desktop
  * state when an agent turn ends.
- * @module @valkia/dsh-plugin-computer-use
+ * @module dsh-desktop-operator
  */
 import type { Context } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';

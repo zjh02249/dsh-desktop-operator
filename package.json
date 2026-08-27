@@ -1,16 +1,16 @@
 {
-  "name": "@valkia/dsh-plugin-computer-use",
-  "description": "DeepSeek Harness/DSH plugin for safe, verifiable Windows Computer Use, desktop automation, UI Automation, and MCP tools",
+  "name": "dsh-desktop-operator",
+  "description": "DSH Desktop Operator: safe Windows Computer Use, desktop automation, UI Automation, and MCP tools for DeepSeek Harness",
   "version": "0.8.0",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zjh02249/dsh-plugin-computer-use.git"
+    "url": "git+https://github.com/zjh02249/dsh-desktop-operator.git"
   },
-  "homepage": "https://github.com/zjh02249/dsh-plugin-computer-use#readme",
+  "homepage": "https://github.com/zjh02249/dsh-desktop-operator#readme",
   "bugs": {
-    "url": "https://github.com/zjh02249/dsh-plugin-computer-use/issues"
+    "url": "https://github.com/zjh02249/dsh-desktop-operator/issues"
   },
   "keywords": [
     "deepseek-harness",
@@ -23,6 +23,7 @@
     "windows",
     "desktop-automation",
     "desktop-control",
+    "desktop-operator",
     "ui-automation",
     "uiautomation",
     "window-management",

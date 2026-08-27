@@ -11,6 +11,12 @@
 - `expected_postcondition` 新增 `window_closed`，并支持最多 8 项非嵌套 `all`/`any` 组合。
 - 对语义明显的发送、删除、支付控件增加 action intent 反降级检查。
 
+### 变更
+
+- 产品正式命名为 `DSH Desktop Operator`，仓库和独立 package ID 统一为 `dsh-desktop-operator`。
+- 新增完整中英文 README、显式语言切换、快速安装、平台矩阵和 GitHub 可发现性说明。
+- `@valkia/dsh-plugin-computer-use` 仅保留为上游来源和旧安装迁移标识。
+
 ### 安全与行为
 
 - 缺失或非法 action intent 时失败关闭。
@@ -58,7 +64,7 @@
 - 提供一键测试、x64/arm64 构建、打包和归档完整性校验。
 - 建立长期 Codex Computer Use 能力对齐路线。
 
-[0.8.0]: https://github.com/zjh02249/dsh-plugin-computer-use/releases/tag/v0.8.0
-[0.7.0]: https://github.com/zjh02249/dsh-plugin-computer-use/releases/tag/v0.7.0
-[0.6.0]: https://github.com/zjh02249/dsh-plugin-computer-use/releases/tag/v0.6.0
-[0.2.0]: https://github.com/zjh02249/dsh-plugin-computer-use/releases/tag/v0.2.0
+[0.8.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.8.0
+[0.7.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.7.0
+[0.6.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.6.0
+[0.2.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.2.0

@@ -1,6 +1,6 @@
 # Integrated Computer Use runtime
 
-This directory is the canonical source and distribution boundary for the native runtime shipped by `@valkia/dsh-plugin-computer-use`.
+This directory is the canonical source and distribution boundary for the native runtime shipped by `dsh-desktop-operator`.
 
 ## Layout
 

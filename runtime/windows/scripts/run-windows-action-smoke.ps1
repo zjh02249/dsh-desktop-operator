@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [string]$RuntimePath = ""
+    [string]$RuntimePath = "",
+
+    [string]$JournalPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,6 +26,10 @@ $RuntimePath = [System.IO.Path]::GetFullPath($RuntimePath)
 if (-not (Test-Path -LiteralPath $RuntimePath -PathType Leaf)) {
     throw "Windows runtime not found: $RuntimePath"
 }
+if ([string]::IsNullOrWhiteSpace($JournalPath)) {
+    $JournalPath = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-desktop-operator-action-smoke-" + [guid]::NewGuid().ToString("N") + ".jsonl")
+}
+$JournalPath = [System.IO.Path]::GetFullPath($JournalPath)
 
 $fixtureTitle = "OCU DSH action smoke $([guid]::NewGuid().ToString('N'))"
 $fixtureFile = Join-Path ([System.IO.Path]::GetTempPath()) ("open-computer-use-fixture-" + [guid]::NewGuid().ToString("N") + ".ps1")
@@ -93,6 +99,7 @@ function Start-McpProcess {
     $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
     $startInfo.EnvironmentVariables["OPEN_COMPUTER_USE_WINDOWS_ALLOW_FOCUS_ACTIONS"] = "1"
     $startInfo.EnvironmentVariables["OPEN_COMPUTER_USE_WINDOWS_ALLOW_UIA_TEXT_FALLBACK"] = "1"
+    $startInfo.EnvironmentVariables["OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_PATH"] = $script:JournalPath
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $startInfo
     if (-not $process.Start()) { throw "Could not start MCP runtime" }
@@ -361,6 +368,27 @@ try {
     $afterPress = Get-SnapshotTokens $pressed
     if ($afterPress.Text -notmatch ([regex]::Escape("clicked:$($typedInput.Value)"))) { throw "press_key post-action state was not observed" }
 
+    $previousJournalPath = $env:OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_PATH
+    try {
+        $env:OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_PATH = $JournalPath
+        $auditJSON = [string](& $RuntimePath action-audit 1000)
+        if ($LASTEXITCODE -ne 0) { throw "action-audit failed with exit code $LASTEXITCODE" }
+    } finally {
+        if ($null -eq $previousJournalPath) {
+            Remove-Item Env:OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_PATH -ErrorAction SilentlyContinue
+        } else {
+            $env:OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_PATH = $previousJournalPath
+        }
+    }
+    $audit = $auditJSON | ConvertFrom-Json
+    $auditEvents = @($audit.events)
+    if ($auditEvents.Count -lt 6) { throw "Persistent action audit contained too few events: $($auditEvents.Count)" }
+    if (@($auditEvents | Where-Object { $_.state -eq "applied" }).Count -lt 1) { throw "Persistent action audit did not contain an applied action" }
+    if (@($auditEvents | Where-Object { $_.state -eq "unknown" }).Count -lt 1) { throw "Persistent action audit did not contain the intentionally unknown postcondition" }
+    if ($auditJSON -match "secret typed text|Retry the same fixture|Set the fixture input to alpha|Keep the fixture input at alpha") {
+        throw "Persistent action audit exposed action payload or intent summary"
+    }
+
     [pscustomobject]@{
         status = "passed"
         app = $window.appId
@@ -379,6 +407,8 @@ try {
         coordinateClickVerified = $true
         typeTextVerified = $true
         pressKeyVerified = $true
+        persistentActionAuditVerified = $true
+        actionAuditEventCount = $auditEvents.Count
     } | ConvertTo-Json -Depth 5
 } finally {
     if ($null -ne $mcpProcess -and -not $mcpProcess.HasExited) {
@@ -390,5 +420,8 @@ try {
     }
     if (Test-Path -LiteralPath $fixtureFile) {
         Remove-Item -LiteralPath $fixtureFile -Force
+    }
+    if (Test-Path -LiteralPath $JournalPath) {
+        Remove-Item -LiteralPath $JournalPath -Force
     }
 }

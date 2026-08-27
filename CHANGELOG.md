@@ -2,6 +2,22 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。在 `1.0.0` 之前，DSH 预发布 API 或 Computer Use 工具协议的变化仍可能带来不兼容调整。
 
+## [0.10.0] - 2026-08-27
+
+### 新增
+
+- 使用每用户 JSONL 动作日志持久化 `idempotency_key`／`action_id` 哈希、动作状态、目标窗口身份和脱敏错误码，runtime 重启后仍能拒绝同一逻辑动作的重复派发。
+- 动作审计覆盖 `reserved`、`dispatched`、`applied`、`rejected` 和 `unknown`；不记录输入文字、设置值、动作摘要或原始幂等键。
+- runtime 启动时检查未完成动作的原进程；确认进程已经退出后，将悬挂动作保守恢复为 `unknown`，禁止自动重放可能已经生效的副作用。
+- 新增 `doctor` 日志状态、`action-audit [limit]` 脱敏审计和 `action-journal-prune` 压缩维护命令。
+- DSH 配置新增日志路径、保留天数和最大事件数；默认写入 `%LOCALAPPDATA%\dsh-desktop-operator\action-journal-v1.jsonl`。
+
+### 可靠性
+
+- 使用 Windows 命名互斥锁、同步落盘和原子替换，协调多个 runtime 的日志预留、恢复和压缩。
+- 尾部中断写入可自动丢弃并恢复；日志中部损坏会失败关闭，避免绕过持久化幂等保护。
+- 新增并发预留、跨重启重复拒绝、进程崩溃恢复、截断恢复、审计脱敏、保留策略和 CLI 回归测试。
+
 ## [0.9.0] - 2026-08-27
 
 ### 新增
@@ -80,6 +96,7 @@
 - 建立长期 Codex Computer Use 能力对齐路线。
 
 [0.9.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.9.0
+[0.10.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.10.0
 [0.8.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.8.0
 [0.7.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.7.0
 [0.6.0]: https://github.com/zjh02249/dsh-desktop-operator/releases/tag/v0.6.0

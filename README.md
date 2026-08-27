@@ -2,7 +2,7 @@
 
 > 🌐 **语言切换 / Language:** **简体中文** | [English](README.en.md)
 
-[![Version](https://img.shields.io/badge/version-0.9.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.10.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20arm64-0078d4)](#系统兼容性)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -10,7 +10,7 @@
 
 项目目标不是简单模拟鼠标键盘，而是逐步复刻 Codex Computer Use 的关键工程能力：精确选择窗口、观察界面、优先使用无障碍元素、执行动作、验证结果、处理模态窗口、在敏感动作前确认，并让用户清楚看到电脑正在被控制。
 
-> 当前开发版本和最新公开 Release：`0.9.0`。项目 Windows-first，可供开发者试用。已在 Windows 10 x64 与 DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6` 上完成真实桌面验证；尚不应视为跨系统、跨应用都达到生产级稳定性的最终版本。
+> 当前开发版本：`0.10.0`；公开发布状态以 [Releases](https://github.com/zjh02249/dsh-desktop-operator/releases) 为准。项目 Windows-first，可供开发者试用。已在 Windows 10 x64 与 DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6` 上完成真实桌面验证；尚不应视为跨系统、跨应用都达到生产级稳定性的最终版本。
 
 ### 项目关系与归属
 
@@ -28,29 +28,29 @@
 dsh-desktop-operator-<版本号>.tgz
 ```
 
-例如 `0.9.0` 对应：
+例如 `0.10.0` 对应：
 
 ```text
-dsh-desktop-operator-0.9.0.tgz
+dsh-desktop-operator-0.10.0.tgz
 ```
 
 如果你刚从源码构建，安装包位于：
 
 ```text
-artifacts/package/dsh-desktop-operator-0.9.0.tgz
+artifacts/package/dsh-desktop-operator-0.10.0.tgz
 ```
 
 ### 2. 安装到 DSH Web Profile
 
 ```powershell
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
 ```
 
 如果终端找不到 `dsh`，使用 DeepSeek Harness 自带的 DSH CLI：
 
 ```powershell
 $DshCli = "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js"
-node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
+node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
 ```
 
 ### 3. 挂载到 Agent Preset
@@ -103,7 +103,7 @@ $PluginRoot = "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-desktop-opera
 
 ```powershell
 dsh plugin --profile web remove '@valkia/dsh-plugin-computer-use'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
 ```
 
 ### 升级已有 `dsh-desktop-operator` 安装
@@ -112,7 +112,7 @@ DSH/pnpm 可能复用同名本地包缓存。升级时建议先移除旧包，�
 
 ```powershell
 dsh plugin --profile web remove 'dsh-desktop-operator'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
 ```
 
 随后重启 DeepSeek Harness，并使用新会话重新验证版本。
@@ -180,7 +180,9 @@ dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
 - 动作后可验证 `target_focused`、`target_value_equals`、`text_contains`、`foreground_window`、`screenshot_changed` 和 `window_closed`。
 - 支持最多 8 个非嵌套 `all`/`any` 后置条件组合。
 - 只有结果得到验证时返回 `ActionStatus: applied`；无法判断时返回 `unknown`，避免假报成功。
-- DSH 为每个有副作用调用注入 `action_id` 与 `idempotency_key`；运行时拒绝已经派发过的同一逻辑动作，并在结果中返回动作 ID 和耗时。
+- DSH 为每个有副作用调用注入 `action_id` 与 `idempotency_key`；运行时把两者的哈希和脱敏动作状态同步写入每用户 JSONL 日志，跨进程重启仍拒绝重复派发，并在实时结果中返回动作 ID 和耗时。
+- 崩溃后启动的新 runtime 会检查悬挂动作的原进程；仅在确认其已退出时把状态恢复为 `unknown`，要求重新观察且绝不自动重放。
+- `doctor`、`action-audit` 和 `action-journal-prune` 提供状态诊断、脱敏审计与保留策略压缩；日志不保存输入文本、设置值、动作摘要或原始幂等键。
 
 ### 用户可见控制状态
 
@@ -213,7 +215,7 @@ dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
 - Electron、Qt、WinUI、UWP、Office 与复杂自绘控件的应用适配矩阵。
 - 钉钉真实联系人搜索、中文输入、消息内容复核和“发送前确认”的完整端到端验收。
 - 截图作为模型图片附件依赖 DSH 挂载 `ctx.attachments`，并要求所选模型路由支持图片输入。
-- 跨 runtime 崩溃后的持久化幂等日志与更完整的审计回放。
+- 审计导出、按动作查询和受控诊断包仍需增强；当前提供脱敏 JSON CLI 查看，不持久化截图或文本正文。
 - 风险动作分类目前主要依赖声明、控件标签和策略，尚不是完整的语义安全引擎。
 
 ## 尚未实现
@@ -284,6 +286,9 @@ get_window_state
 | `allowAppLaunch` | `false` | 是否允许 runtime 启动应用 |
 | `visualIndicator` | `true` | 是否显示控制提示条、鼠标光环和平滑移动 |
 | `actionLockTimeoutMs` | `5000` | 等待跨进程 Windows 前台输入锁的最长毫秒数，范围 `1–120000` |
+| `actionJournalPath` | `""` | 空值使用 `%LOCALAPPDATA%\dsh-desktop-operator\action-journal-v1.jsonl`；非空必须是绝对路径 |
+| `actionJournalRetentionDays` | `30` | 持久化幂等与审计事件保留天数，范围 `1–3650` |
+| `actionJournalMaxEvents` | `4096` | 压缩后保留的最大事件数，范围 `100–100000` |
 | `toolCallTimeoutMs` | `120000` | 单次工具调用超时毫秒数 |
 | `failOnStartupError` | `true` | runtime 启动或工具发现失败时是否拒绝激活 |
 | `reconnect.enabled` | `true` | 意外断开后是否重连 |

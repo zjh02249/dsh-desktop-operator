@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop-operator",
   "description": "DSH Desktop Operator: safe Windows Computer Use, desktop automation, UI Automation, and MCP tools for DeepSeek Harness",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "type": "module",
   "license": "MIT",
   "repository": {

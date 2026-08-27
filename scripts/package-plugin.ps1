@@ -64,6 +64,8 @@ try {
         "package/runtime/bin/win32-x64/open-computer-use.exe",
         "package/runtime/bin/win32-arm64/open-computer-use.exe",
         "package/runtime/windows/main.go",
+        "package/runtime/windows/journal.go",
+        "package/runtime/windows/journal_windows.go",
         "package/runtime/windows/capture_helper.cs",
         "package/runtime/windows/indicator.ps1",
         "package/runtime/windows/runtime.ps1",

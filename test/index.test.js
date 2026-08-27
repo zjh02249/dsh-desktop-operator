@@ -120,6 +120,8 @@ test('resolveRuntimeEnv enables foreground verification by default', () => {
     OPEN_COMPUTER_USE_WINDOWS_INTERACTION_MODE: 'foreground-verified',
     OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR: '1',
     OPEN_COMPUTER_USE_WINDOWS_ACTION_LOCK_TIMEOUT_MS: '5000',
+    OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_RETENTION_DAYS: '30',
+    OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_MAX_EVENTS: '4096',
   })
 })
 
@@ -148,6 +150,20 @@ test('resolveRuntimeEnv keeps unrelated env and lets explicit config win', () =>
 test('resolveRuntimeEnv forwards an explicit foreground action lock timeout', () => {
   const env = resolveRuntimeEnv({ actionLockTimeoutMs: 12_345 })
   assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_ACTION_LOCK_TIMEOUT_MS, '12345')
+})
+
+test('resolveRuntimeEnv forwards durable action journal policy without overriding an empty path', () => {
+  const env = resolveRuntimeEnv({
+    env: { OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_PATH: 'D:\\advanced\\journal.jsonl' },
+    actionJournalRetentionDays: 90,
+    actionJournalMaxEvents: 8_192,
+  })
+  assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_PATH, 'D:\\advanced\\journal.jsonl')
+  assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_RETENTION_DAYS, '90')
+  assert.equal(env.OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_MAX_EVENTS, '8192')
+
+  const explicit = resolveRuntimeEnv({ actionJournalPath: 'D:\\audit\\desktop-actions.jsonl' })
+  assert.equal(explicit.OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_PATH, 'D:\\audit\\desktop-actions.jsonl')
 })
 
 test('resolveRuntimeEnv disables focus flags in background mode', () => {

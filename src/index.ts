@@ -68,6 +68,12 @@ export interface Config {
   visualIndicator?: boolean
   /** Maximum wait for the cross-process foreground-input lock in milliseconds. */
   actionLockTimeoutMs?: number
+  /** Absolute path for the durable redacted JSONL action journal; empty uses the per-user LocalAppData default. */
+  actionJournalPath?: string
+  /** Number of days that persistent idempotency and audit events are retained. */
+  actionJournalRetentionDays?: number
+  /** Maximum number of persistent audit events retained after compaction. */
+  actionJournalMaxEvents?: number
   /** Per-MCP-tool deadline in milliseconds. */
   toolCallTimeoutMs?: number
   /** Whether initial MCP launch or tool discovery failure rejects plugin activation. */
@@ -103,6 +109,9 @@ export const Config: z<Config> = z.object({
   allowAppLaunch: z.boolean().default(false),
   visualIndicator: z.boolean().default(true),
   actionLockTimeoutMs: z.number().step(1).min(1).max(120_000).default(5_000),
+  actionJournalPath: z.string().default(''),
+  actionJournalRetentionDays: z.number().step(1).min(1).max(3_650).default(30),
+  actionJournalMaxEvents: z.number().step(1).min(100).max(100_000).default(4_096),
   toolCallTimeoutMs: z.number().min(1).default(120_000),
   failOnStartupError: z.boolean().default(true),
   reconnect: Reconnect,
@@ -176,8 +185,9 @@ export function resolveRuntimeLaunch(
  * @param config - plugin config carrying explicit env plus high-level runtime switches.
  * @returns env object suitable for both MCP launch and one-shot cleanup helpers.
  */
-export function resolveRuntimeEnv(config: Pick<Config, 'env' | 'interactionMode' | 'allowAppLaunch' | 'visualIndicator' | 'actionLockTimeoutMs'>): Record<string, string> {
+export function resolveRuntimeEnv(config: Pick<Config, 'env' | 'interactionMode' | 'allowAppLaunch' | 'visualIndicator' | 'actionLockTimeoutMs' | 'actionJournalPath' | 'actionJournalRetentionDays' | 'actionJournalMaxEvents'>): Record<string, string> {
   const interactionMode = config.interactionMode ?? 'foreground-verified'
+  const actionJournalPath = config.actionJournalPath?.trim() ?? ''
   return {
     ...(config.env ?? {}),
     OPEN_COMPUTER_USE_WINDOWS_ALLOW_FOCUS_ACTIONS: interactionMode === 'foreground-verified' ? '1' : '0',
@@ -186,6 +196,9 @@ export function resolveRuntimeEnv(config: Pick<Config, 'env' | 'interactionMode'
     OPEN_COMPUTER_USE_WINDOWS_INTERACTION_MODE: interactionMode,
     OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR: config.visualIndicator === false ? '0' : '1',
     OPEN_COMPUTER_USE_WINDOWS_ACTION_LOCK_TIMEOUT_MS: String(config.actionLockTimeoutMs ?? 5_000),
+    OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_RETENTION_DAYS: String(config.actionJournalRetentionDays ?? 30),
+    OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_MAX_EVENTS: String(config.actionJournalMaxEvents ?? 4_096),
+    ...(actionJournalPath === '' ? {} : { OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_PATH: actionJournalPath }),
   }
 }
 
@@ -434,6 +447,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const allowAppLaunch = config.allowAppLaunch ?? false
   const visualIndicator = config.visualIndicator ?? true
   const actionLockTimeoutMs = config.actionLockTimeoutMs ?? 5_000
+  const actionJournalPath = config.actionJournalPath ?? ''
+  const actionJournalRetentionDays = config.actionJournalRetentionDays ?? 30
+  const actionJournalMaxEvents = config.actionJournalMaxEvents ?? 4_096
   const toolCallTimeoutMs = config.toolCallTimeoutMs ?? 120_000
   const failOnStartupError = config.failOnStartupError ?? true
   const cleanupOnTurnEnd = config.cleanupOnTurnEnd ?? true
@@ -448,6 +464,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     allowAppLaunch,
     visualIndicator,
     actionLockTimeoutMs,
+    actionJournalPath,
+    actionJournalRetentionDays,
+    actionJournalMaxEvents,
   })
   const usedAgents = new WeakSet<Agent>()
 

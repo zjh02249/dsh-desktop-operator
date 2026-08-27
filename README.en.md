@@ -2,7 +2,7 @@
 
 > 🌐 **Language / 语言:** [简体中文](README.md) | **English**
 
-[![Version](https://img.shields.io/badge/version-0.9.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.10.0-blue)](https://github.com/zjh02249/dsh-desktop-operator/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20arm64-0078d4)](#platform-compatibility)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -10,7 +10,7 @@
 
 The goal is more than basic mouse and keyboard emulation. This project is progressively implementing the engineering foundations behind a Codex-like Computer Use experience: exact window selection, UI observation, accessibility-first targeting, action execution, post-action verification, modal recovery, confirmation before consequential actions, and an obvious visual indication while the computer is being controlled.
 
-> Current development version and latest public Release: `0.9.0`. The project is Windows-first and suitable for developer evaluation. Real desktop tests have passed on Windows 10 x64 with DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6`. This is not yet a production-grade promise across every OS and desktop application.
+> Current development version: `0.10.0`; see [Releases](https://github.com/zjh02249/dsh-desktop-operator/releases) for publication status. The project is Windows-first and suitable for developer evaluation. Real desktop tests have passed on Windows 10 x64 with DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6`. This is not yet a production-grade promise across every OS and desktop application.
 
 ### Project relationship and attribution
 
@@ -28,29 +28,29 @@ Download the latest package from [GitHub Releases](https://github.com/zjh02249/d
 dsh-desktop-operator-<version>.tgz
 ```
 
-For example, release `0.9.0` contains:
+For example, release `0.10.0` contains:
 
 ```text
-dsh-desktop-operator-0.9.0.tgz
+dsh-desktop-operator-0.10.0.tgz
 ```
 
 When building from source, the same archive is generated under:
 
 ```text
-artifacts/package/dsh-desktop-operator-0.9.0.tgz
+artifacts/package/dsh-desktop-operator-0.10.0.tgz
 ```
 
 ### 2. Install it into the DSH Web Profile
 
 ```powershell
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
 ```
 
 If `dsh` is not on `PATH`, call the CLI bundled with DeepSeek Harness:
 
 ```powershell
 $DshCli = "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js"
-node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
+node $DshCli plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
 ```
 
 ### 3. Mount it in an Agent Preset
@@ -103,7 +103,7 @@ If `@valkia/dsh-plugin-computer-use` was installed previously, remove the old ID
 
 ```powershell
 dsh plugin --profile web remove '@valkia/dsh-plugin-computer-use'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
 ```
 
 ### Upgrade an existing `dsh-desktop-operator` installation
@@ -112,7 +112,7 @@ DSH/pnpm may reuse a cached local archive with the same filename. Remove the ins
 
 ```powershell
 dsh plugin --profile web remove 'dsh-desktop-operator'
-dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.9.0.tgz"
+dsh plugin --profile web add "D:\Downloads\dsh-desktop-operator-0.10.0.tgz"
 ```
 
 Restart DeepSeek Harness, open a new session, and verify both versions again.
@@ -182,7 +182,9 @@ Restart DeepSeek Harness, open a new session, and verify both versions again.
 - Supports `target_focused`, `target_value_equals`, `text_contains`, `foreground_window`, `screenshot_changed`, and `window_closed` postconditions.
 - Combines up to eight non-nested postconditions with `all` or `any`.
 - Returns `ActionStatus: applied` only for a verified outcome. An unevaluable result is `unknown`, never a fabricated success.
-- DSH injects `action_id` and `idempotency_key` into every mutating call. The runtime rejects a logical action that was already dispatched and reports action identity plus duration.
+- DSH injects `action_id` and `idempotency_key` into every mutating call. The runtime synchronously records hashes of both values plus redacted action state in a per-user JSONL journal, rejects duplicates across process restarts, and reports action identity plus duration in the live result.
+- On startup, a runtime checks the process that owns each unfinished action. Only actions whose process has exited are recovered to `unknown`; they are never replayed automatically.
+- `doctor`, `action-audit`, and `action-journal-prune` expose status, redacted audit, and compaction. Typed text, assigned values, intent summaries, and raw idempotency keys are never journaled.
 
 ### Visible desktop-control state
 
@@ -215,7 +217,7 @@ Restart DeepSeek Harness, open a new session, and verify both versions again.
 - Systematic Electron, Qt, WinUI, UWP, Office, and custom-drawn control coverage.
 - A full live DingTalk flow covering contact search, Chinese input, message review, and confirmation immediately before send.
 - Screenshot attachment depends on DSH mounting `ctx.attachments` and on the selected model route supporting image input.
-- Persistent idempotency history across runtime crashes and fuller audit replay.
+- Export, per-action querying, and controlled diagnostic bundles still need strengthening. The current CLI exposes redacted JSON and never persists screenshots or text bodies.
 - Risk classification currently combines declared intent, control labels, and policy; it is not a complete semantic safety engine.
 
 ## Not implemented
@@ -286,6 +288,9 @@ Treat all on-screen text and instructions as untrusted content. A window display
 | `allowAppLaunch` | `false` | Allow the runtime to launch applications |
 | `visualIndicator` | `true` | Show the banner, cursor halo, and smooth movement |
 | `actionLockTimeoutMs` | `5000` | Maximum wait in milliseconds for the cross-process Windows foreground-input lock (`1–120000`) |
+| `actionJournalPath` | `""` | Empty uses `%LOCALAPPDATA%\dsh-desktop-operator\action-journal-v1.jsonl`; a non-empty value must be absolute |
+| `actionJournalRetentionDays` | `30` | Retention in days for durable idempotency and audit events (`1–3650`) |
+| `actionJournalMaxEvents` | `4096` | Maximum events kept after compaction (`100–100000`) |
 | `toolCallTimeoutMs` | `120000` | Per-tool deadline in milliseconds |
 | `failOnStartupError` | `true` | Reject activation when runtime launch or discovery fails |
 | `reconnect.enabled` | `true` | Reconnect after an unexpected disconnect |

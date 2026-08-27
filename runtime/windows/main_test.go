@@ -14,6 +14,7 @@ import (
 
 func TestMain(m *testing.M) {
 	_ = os.Setenv("OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR", "0")
+	_ = os.Setenv("OPEN_COMPUTER_USE_WINDOWS_ACTION_JOURNAL_DISABLED", "1")
 	os.Exit(m.Run())
 }
 

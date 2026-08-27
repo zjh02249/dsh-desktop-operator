@@ -47,6 +47,12 @@ export interface Config {
     visualIndicator?: boolean;
     /** Maximum wait for the cross-process foreground-input lock in milliseconds. */
     actionLockTimeoutMs?: number;
+    /** Absolute path for the durable redacted JSONL action journal; empty uses the per-user LocalAppData default. */
+    actionJournalPath?: string;
+    /** Number of days that persistent idempotency and audit events are retained. */
+    actionJournalRetentionDays?: number;
+    /** Maximum number of persistent audit events retained after compaction. */
+    actionJournalMaxEvents?: number;
     /** Per-MCP-tool deadline in milliseconds. */
     toolCallTimeoutMs?: number;
     /** Whether initial MCP launch or tool discovery failure rejects plugin activation. */
@@ -92,7 +98,7 @@ export declare function resolveRuntimeLaunch(config: Pick<Config, 'runtimeExecut
  * @param config - plugin config carrying explicit env plus high-level runtime switches.
  * @returns env object suitable for both MCP launch and one-shot cleanup helpers.
  */
-export declare function resolveRuntimeEnv(config: Pick<Config, 'env' | 'interactionMode' | 'allowAppLaunch' | 'visualIndicator' | 'actionLockTimeoutMs'>): Record<string, string>;
+export declare function resolveRuntimeEnv(config: Pick<Config, 'env' | 'interactionMode' | 'allowAppLaunch' | 'visualIndicator' | 'actionLockTimeoutMs' | 'actionJournalPath' | 'actionJournalRetentionDays' | 'actionJournalMaxEvents'>): Record<string, string>;
 /** Model guidance for semantic-first, observable desktop operation. */
 export declare const COMPUTER_USE_PROMPT: string;
 /**

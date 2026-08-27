@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-var version = "0.9.0"
+var version = "0.10.0"
 
 const (
 	mcpProtocolVersion = "2025-03-26"
@@ -348,13 +348,7 @@ type service struct {
 	showIndicator func(psRequest)
 	callSlot      chan struct{}
 	callContext   context.Context
-	actionsMu     sync.Mutex
-	actions       map[string]actionRecord
-}
-
-type actionRecord struct {
-	ActionID  string
-	StartedAt time.Time
+	journal       actionJournal
 }
 
 type controlIndicatorState struct {
@@ -394,13 +388,24 @@ type resolvedActionTarget struct {
 }
 
 func newService() *service {
+	journal, err := newConfiguredActionJournal()
+	if err != nil {
+		journal = &failingActionJournal{err: err}
+	}
+	return newServiceWithJournal(journal)
+}
+
+func newServiceWithJournal(journal actionJournal) *service {
+	if journal == nil {
+		journal = newMemoryActionJournal()
+	}
 	service := &service{
 		snapshots:     map[string]*appSnapshot{},
 		runPS:         runPowerShell,
 		showIndicator: showControlIndicator,
 		callSlot:      make(chan struct{}, 1),
 		callContext:   context.Background(),
-		actions:       map[string]actionRecord{},
+		journal:       journal,
 	}
 	service.callSlot <- struct{}{}
 	return service
@@ -414,7 +419,23 @@ func (s *service) executePS(request psRequest) (*psResponse, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return s.runPS(ctx, request)
+	if !isMutatingTool(request.Tool) {
+		return s.runPS(ctx, request)
+	}
+	if err := s.journal.MarkDispatched(request); err != nil {
+		return nil, fmt.Errorf("action_audit_dispatch_failed: %w", err)
+	}
+	started := time.Now()
+	response, runErr := s.runPS(ctx, request)
+	state, errorCode := actionCompletionState(response, runErr)
+	if err := s.journal.Complete(request, state, errorCode, time.Since(started)); err != nil {
+		return &psResponse{
+			OK:     false,
+			Status: "unknown",
+			Error:  fmt.Sprintf("action_audit_completion_failed(action_id=%q): %v", request.ActionID, err),
+		}, nil
+	}
+	return response, runErr
 }
 
 func (s *service) callTool(name string, args map[string]any) toolCallResult {
@@ -952,24 +973,7 @@ func (s *service) beginAction(request *psRequest) error {
 		request.IdempotencyKey = key
 	}
 
-	s.actionsMu.Lock()
-	defer s.actionsMu.Unlock()
-	if previous, exists := s.actions[key]; exists {
-		return fmt.Errorf("duplicate_action(idempotency_key=%q, first_action_id=%q): this mutating action has already been dispatched; re-observe before deciding what to do next", key, previous.ActionID)
-	}
-	if len(s.actions) >= 512 {
-		var oldestKey string
-		var oldestTime time.Time
-		for candidate, record := range s.actions {
-			if oldestKey == "" || record.StartedAt.Before(oldestTime) {
-				oldestKey = candidate
-				oldestTime = record.StartedAt
-			}
-		}
-		delete(s.actions, oldestKey)
-	}
-	s.actions[key] = actionRecord{ActionID: request.ActionID, StartedAt: time.Now().UTC()}
-	return nil
+	return s.journal.Reserve(*request)
 }
 
 func actionFingerprint(request psRequest) string {
@@ -2171,7 +2175,54 @@ func runCLI(args []string, stdout io.Writer) error {
 		})
 	case "doctor":
 		fmt.Fprintln(stdout, "Windows runtime: UI Automation, Win32 input, and the click-through control indicator are available when this process runs in the signed-in desktop session.")
+		journal, err := newConfiguredActionJournal()
+		if err != nil {
+			return err
+		}
+		status, err := journal.Status()
+		if err != nil {
+			return err
+		}
+		encoded, err := json.Marshal(status)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Action journal: %s\n", encoded)
 		return nil
+	case "action-audit":
+		limit := 100
+		if len(args) > 2 {
+			return errors.New("usage: action-audit [limit]")
+		}
+		if len(args) == 2 {
+			parsed, err := strconv.Atoi(args[1])
+			if err != nil || parsed < 1 || parsed > 1000 {
+				return errors.New("action-audit limit must be an integer from 1 to 1000")
+			}
+			limit = parsed
+		}
+		journal, err := newConfiguredActionJournal()
+		if err != nil {
+			return err
+		}
+		events, err := journal.Audit(limit)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(stdout).Encode(map[string]any{
+			"schemaVersion": actionJournalSchemaVersion,
+			"events":        events,
+		})
+	case "action-journal-prune":
+		journal, err := newConfiguredActionJournal()
+		if err != nil {
+			return err
+		}
+		status, err := journal.Prune()
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(stdout).Encode(status)
 	case "turn-ended":
 		hideControlIndicator()
 		return nil
@@ -2661,6 +2712,10 @@ func helpText(command string) string {
 		return "Usage:\n  open-computer-use.exe call <tool> [--args '<json-object>']\n  open-computer-use.exe call --calls '<json-array>'\n\nThe JSON array form keeps all calls in one process so element_index state can be reused.\n"
 	case "snapshot":
 		return "Usage:\n  open-computer-use.exe snapshot [--text-limit <positive-int|max>] [--max-tree-nodes <positive-int>] [--max-tree-depth <positive-int>] <app>\n\nPrint the current Windows UI Automation snapshot for the target app.\n"
+	case "action-audit":
+		return "Usage:\n  open-computer-use.exe action-audit [limit]\n\nPrint up to 1000 redacted persistent action audit events.\n"
+	case "action-journal-prune":
+		return "Usage:\n  open-computer-use.exe action-journal-prune\n\nApply configured retention and event limits to the persistent action journal.\n"
 	default:
 		return `Open Computer Use for Windows
 
@@ -2671,6 +2726,8 @@ Commands:
   mcp                  Start the stdio MCP server.
   mcp-info             Print compiled MCP metadata for diagnostics and CI.
   doctor               Print Windows runtime notes.
+  action-audit [limit]  Print redacted persistent action audit events.
+  action-journal-prune  Compact the persistent action journal.
   turn-ended           Hide the desktop control indicator and clear transient turn state.
   indicator-demo       Show the click-through control indicator for 5 seconds.
   list-apps            Print running apps with top-level windows.

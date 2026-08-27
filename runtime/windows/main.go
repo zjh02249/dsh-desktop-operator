@@ -19,6 +19,11 @@ import (
 
 var version = "0.8.0"
 
+const (
+	mcpProtocolVersion = "2025-03-26"
+	mcpServerName      = "open-computer-use"
+)
+
 var clickMethodValues = []string{"auto", "accessibility", "app_post", "sky_click", "global"}
 
 //go:embed runtime.ps1
@@ -1973,6 +1978,15 @@ func runCLI(args []string, stdout io.Writer) error {
 		return nil
 	case "mcp":
 		return runMCP(os.Stdin, stdout)
+	case "mcp-info":
+		return json.NewEncoder(stdout).Encode(map[string]any{
+			"protocolVersion": mcpProtocolVersion,
+			"serverInfo": map[string]any{
+				"name":    mcpServerName,
+				"version": version,
+			},
+			"tools": toolDefinitions(),
+		})
 	case "doctor":
 		fmt.Fprintln(stdout, "Windows runtime: UI Automation, Win32 input, and the click-through control indicator are available when this process runs in the signed-in desktop session.")
 		return nil
@@ -2291,9 +2305,9 @@ func handleMCPRequest(request map[string]any, svc *service) map[string]any {
 	switch method {
 	case "initialize":
 		return jsonRPCResult(id, map[string]any{
-			"protocolVersion": "2025-03-26",
+			"protocolVersion": mcpProtocolVersion,
 			"serverInfo": map[string]any{
-				"name":    "open-computer-use",
+				"name":    mcpServerName,
 				"version": version,
 			},
 			"capabilities": map[string]any{"tools": map[string]any{"listChanged": false}},
@@ -2339,6 +2353,8 @@ func helpText(command string) string {
 	switch command {
 	case "mcp":
 		return "Usage:\n  open-computer-use.exe mcp\n\nStart the stdio MCP server.\n"
+	case "mcp-info":
+		return "Usage:\n  open-computer-use.exe mcp-info\n\nPrint compiled MCP protocol and tool metadata without requiring a desktop session.\n"
 	case "call":
 		return "Usage:\n  open-computer-use.exe call <tool> [--args '<json-object>']\n  open-computer-use.exe call --calls '<json-array>'\n\nThe JSON array form keeps all calls in one process so element_index state can be reused.\n"
 	case "snapshot":
@@ -2351,6 +2367,7 @@ Usage:
 
 Commands:
   mcp                  Start the stdio MCP server.
+  mcp-info             Print compiled MCP metadata for diagnostics and CI.
   doctor               Print Windows runtime notes.
   turn-ended           Hide the desktop control indicator and clear transient turn state.
   indicator-demo       Show the click-through control indicator for 5 seconds.

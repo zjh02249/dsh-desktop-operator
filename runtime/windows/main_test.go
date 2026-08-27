@@ -695,6 +695,36 @@ func TestMCPInitializeResponseContainsToolsCapability(t *testing.T) {
 	}
 }
 
+func TestMCPInfoCommandPrintsCompiledProtocolAndTools(t *testing.T) {
+	var out bytes.Buffer
+	if err := runCLI([]string{"mcp-info"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var info struct {
+		ProtocolVersion string            `json:"protocolVersion"`
+		ServerInfo      map[string]string `json:"serverInfo"`
+		Tools           []toolDefinition  `json:"tools"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &info); err != nil {
+		t.Fatalf("decode mcp-info: %v\n%s", err, out.String())
+	}
+	if info.ProtocolVersion != "2025-03-26" {
+		t.Fatalf("protocolVersion = %q", info.ProtocolVersion)
+	}
+	if info.ServerInfo["name"] != mcpServerName || info.ServerInfo["version"] != version {
+		t.Fatalf("serverInfo = %#v", info.ServerInfo)
+	}
+	names := map[string]bool{}
+	for _, tool := range info.Tools {
+		names[tool.Name] = true
+	}
+	for _, required := range []string{"list_windows", "get_window", "activate_window", "get_window_state", "click", "type_text", "press_key", "set_value"} {
+		if !names[required] {
+			t.Fatalf("mcp-info missing required tool %q", required)
+		}
+	}
+}
+
 func TestCLIHelpMentionsWindowsRuntime(t *testing.T) {
 	var out bytes.Buffer
 	if err := runCLI([]string{"--help"}, &out); err != nil {

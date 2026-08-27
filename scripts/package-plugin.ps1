@@ -96,95 +96,22 @@ try {
             throw "Packaged runtime version mismatch. Expected $($package.version), received '$runtimeVersion'."
         }
 
-        $mcpRequests = @(
-            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"package-verifier","version":"1"}}}',
-            '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}',
-            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-        )
-        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $startInfo.FileName = $packagedRuntime
-        $startInfo.Arguments = "mcp"
-        $startInfo.UseShellExecute = $false
-        $startInfo.CreateNoWindow = $true
-        $startInfo.RedirectStandardInput = $true
-        $startInfo.RedirectStandardOutput = $true
-        $startInfo.RedirectStandardError = $true
-        $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
-        $startInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
-        $startInfo.EnvironmentVariables["OPEN_COMPUTER_USE_WINDOWS_VISUAL_INDICATOR"] = "false"
-        $mcpProcess = New-Object System.Diagnostics.Process
-        $mcpProcess.StartInfo = $startInfo
-        $mcpStarted = $false
-        $responses = @()
-        $terminatedAfterVerification = $false
+        $mcpInfoJson = [string](& $packagedRuntime mcp-info)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Packaged MCP runtime metadata probe failed with exit code $LASTEXITCODE."
+        }
         try {
-            if (-not $mcpProcess.Start()) { throw "Could not start the packaged MCP runtime." }
-            $mcpStarted = $true
-            $stderrTask = $mcpProcess.StandardError.ReadToEndAsync()
-            $mcpProcess.StandardInput.AutoFlush = $true
-            foreach ($request in $mcpRequests) {
-                $mcpProcess.StandardInput.WriteLine($request)
-            }
-
-            $deadline = [DateTime]::UtcNow.AddSeconds(30)
-            while ($true) {
-                $remainingMilliseconds = [Math]::Max(1, [int]($deadline - [DateTime]::UtcNow).TotalMilliseconds)
-                if ($remainingMilliseconds -le 1) {
-                    throw "Packaged MCP runtime did not return the required JSON-RPC responses within 30 seconds."
-                }
-                $lineTask = $mcpProcess.StandardOutput.ReadLineAsync()
-                if (-not $lineTask.Wait($remainingMilliseconds)) {
-                    throw "Packaged MCP runtime did not return the required JSON-RPC responses within 30 seconds."
-                }
-                $line = $lineTask.Result
-                if ($null -eq $line) {
-                    throw "Packaged MCP runtime closed stdout before returning the required JSON-RPC responses."
-                }
-                if ([string]::IsNullOrWhiteSpace($line)) { continue }
-                try {
-                    $responses += $line | ConvertFrom-Json -ErrorAction Stop
-                } catch {
-                    throw "Packaged MCP runtime returned invalid JSON: $line"
-                }
-                $initializeResponse = $responses | Where-Object { $_.id -eq 1 } | Select-Object -First 1
-                $toolsResponse = $responses | Where-Object { $_.id -eq 2 } | Select-Object -First 1
-                if ($null -ne $initializeResponse -and $null -ne $toolsResponse) { break }
-            }
-
-            $mcpProcess.StandardInput.Close()
-            if (-not $mcpProcess.HasExited) {
-                $mcpProcess.Kill()
-                $terminatedAfterVerification = $true
-                $null = $mcpProcess.WaitForExit(5000)
-            }
-            if (-not $stderrTask.Wait(5000)) {
-                throw "Packaged MCP runtime stderr did not close after verification."
-            }
-            $stderr = $stderrTask.Result.Trim()
-            if (-not $terminatedAfterVerification -and $mcpProcess.ExitCode -ne 0) {
-                throw "Packaged MCP runtime exited with code $($mcpProcess.ExitCode). stderr: $stderr"
-            }
-        } finally {
-            if ($mcpStarted -and -not $mcpProcess.HasExited) {
-                try { $mcpProcess.StandardInput.Close() } catch {}
-                try { $mcpProcess.Kill() } catch {}
-                $null = $mcpProcess.WaitForExit(5000)
-            }
-            $mcpProcess.Dispose()
+            $mcpInfo = $mcpInfoJson | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            throw "Packaged MCP runtime returned invalid metadata JSON: $mcpInfoJson"
         }
-        $initializeResponse = $responses | Where-Object { $_.id -eq 1 } | Select-Object -First 1
-        $toolsResponse = $responses | Where-Object { $_.id -eq 2 } | Select-Object -First 1
-        if ($null -eq $initializeResponse -or $null -eq $toolsResponse) {
-            $responseIds = @($responses | ForEach-Object { [string]$_.id }) -join ", "
-            throw "Packaged MCP runtime returned incomplete JSON-RPC responses. Received ids: $responseIds"
+        if ($mcpInfo.protocolVersion -ne "2025-03-26") {
+            throw "Packaged MCP runtime returned unexpected protocol version '$($mcpInfo.protocolVersion)'."
         }
-        if ($null -ne $initializeResponse.error -or $null -ne $toolsResponse.error) {
-            throw "Packaged MCP runtime returned a JSON-RPC error during archive verification."
+        if ($mcpInfo.serverInfo.version -ne [string]$package.version) {
+            throw "Packaged MCP metadata version mismatch. Expected $($package.version), received '$($mcpInfo.serverInfo.version)'."
         }
-        if ($initializeResponse.result.protocolVersion -ne "2025-03-26") {
-            throw "Packaged MCP runtime returned unexpected protocol version '$($initializeResponse.result.protocolVersion)'."
-        }
-        $toolNames = @($toolsResponse.result.tools | ForEach-Object { $_.name })
+        $toolNames = @($mcpInfo.tools | ForEach-Object { $_.name })
         $requiredTools = @("list_windows", "get_window", "activate_window", "get_window_state", "click", "type_text", "press_key", "set_value")
         $missingTools = @($requiredTools | Where-Object { $_ -notin $toolNames })
         if ($missingTools.Count -gt 0) {

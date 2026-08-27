@@ -1,6 +1,6 @@
 {
   "name": "@valkia/dsh-plugin-computer-use",
-  "description": "Opt-in DeepSeek Harness desktop Computer Use tools over Open Computer Use MCP",
+  "description": "DeepSeek Harness/DSH plugin for safe, verifiable Windows Computer Use, desktop automation, UI Automation, and MCP tools",
   "version": "0.8.0",
   "type": "module",
   "license": "MIT",
@@ -14,10 +14,20 @@
   },
   "keywords": [
     "deepseek-harness",
+    "deepseek",
+    "dsh",
     "dsh-plugin",
     "computer-use",
     "mcp",
-    "accessibility"
+    "accessibility",
+    "windows",
+    "desktop-automation",
+    "desktop-control",
+    "ui-automation",
+    "uiautomation",
+    "window-management",
+    "ai-agent",
+    "codex"
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
@@ -50,6 +60,7 @@
     "lib/**/*.d.ts",
     "cordis.patch.yml",
     "README.md",
+    "README.en.md",
     "README.zh.md",
     "CHANGELOG.md",
     "ROADMAP.md",

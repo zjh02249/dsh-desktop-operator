@@ -1,14 +1,22 @@
-# DeepSeek Harness Computer Use
+# DeepSeek Harness Computer Use Plugin
+
+> 🌐 **语言切换 / Language:** **简体中文** | [English](README.en.md)
 
 [![Version](https://img.shields.io/badge/version-0.8.0-blue)](https://github.com/zjh02249/dsh-plugin-computer-use/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20arm64-0078d4)](#系统兼容性)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-`@valkia/dsh-plugin-computer-use` 是一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 Windows 桌面控制插件。它把经过适配的 Open Computer Use 原生运行时、DSH 桥接层、许可证和 Windows x64/arm64 二进制打进**一个插件包**，安装后不再依赖第二个项目或相邻源码目录。
+`@valkia/dsh-plugin-computer-use` 是一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) / DSH 的 Windows Computer Use、桌面自动化和 MCP 插件。它把经过适配的 Open Computer Use 原生运行时、DSH 桥接层、许可证和 Windows x64/arm64 二进制打进**一个插件包**，安装后不再依赖第二个项目或相邻源码目录。
 
 项目目标不是简单模拟鼠标键盘，而是逐步复刻 Codex Computer Use 的关键工程能力：精确选择窗口、观察界面、优先使用无障碍元素、执行动作、验证结果、处理模态窗口、在敏感动作前确认，并让用户清楚看到电脑正在被控制。
 
 > 当前状态：`0.8.0`，Windows-first，可供开发者试用。已在 Windows 10 x64 与 DeepSeek Harness `0.3.5` / DSH `0.1.0-rc.6` 上完成真实桌面验证；尚不应视为跨系统、跨应用都达到生产级稳定性的最终版本。
+
+### 项目关系与归属
+
+这是 [valkia/dsh-plugin-computer-use](https://github.com/valkia/dsh-plugin-computer-use) 的**独立维护增强衍生版**。原插件实现来自 DeepSeek Harness 相关工作；本仓库保留原始 MIT 许可证与 `Copyright (c) 2026 DeepSeek` 声明，并正式合并、持续改造了来自 [iFurySt/open-codex-computer-use](https://github.com/iFurySt/open-codex-computer-use) 的 Windows runtime。本仓库不是 DeepSeek 官方发行版。
+
+软件包 ID 暂时保留为 `@valkia/dsh-plugin-computer-use`，仅用于兼容已经存在的 DSH Agent Preset 和本机安装，不表示本仓库拥有或代表 GitHub 用户 `valkia`。若未来发布到公共 npm registry，应在一次明确的破坏性版本升级中切换到维护者自己的 package scope。
 
 ## 快速安装
 

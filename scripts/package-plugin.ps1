@@ -58,6 +58,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Could not inspect package archive $($archive.FullName)." }
     $requiredEntries = @(
         "package/lib/index.js",
+        "package/README.en.md",
+        "package/CHANGELOG.md",
         "package/runtime/bin/runtime-manifest.json",
         "package/runtime/bin/win32-x64/open-computer-use.exe",
         "package/runtime/bin/win32-arm64/open-computer-use.exe",

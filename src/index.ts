@@ -242,10 +242,24 @@ function ensureComputerUseActionIdentity(exec: ToolExecution): void {
   if (!isComputerUseActionTool(exec.name) || typeof exec.arguments !== 'object' || exec.arguments === null || Array.isArray(exec.arguments)) return
   const args = exec.arguments as Record<string, unknown>
   const explicitActionID = typeof args.action_id === 'string' ? args.action_id.trim() : ''
+  const needsIdempotencyKey = typeof args.idempotency_key !== 'string' || args.idempotency_key.trim() === ''
+  if (explicitActionID !== '' && !needsIdempotencyKey) return
   const actionID = explicitActionID || exec.callId
-  args.action_id = actionID
-  if (typeof args.idempotency_key !== 'string' || args.idempotency_key.trim() === '') {
-    args.idempotency_key = actionID
+  try {
+    args.action_id = actionID
+    if (needsIdempotencyKey) args.idempotency_key = actionID
+  } catch {
+    // Newer dsh-tools runtimes deep-freeze `exec.arguments` at creation while
+    // `exec` itself stays writable until dispatch: swap in an enriched copy.
+    try {
+      ;(exec as { arguments: Record<string, unknown> }).arguments = {
+        ...args,
+        action_id: actionID,
+        ...(needsIdempotencyKey ? { idempotency_key: actionID } : {}),
+      }
+    } catch {
+      // `exec` is frozen too — identity enrichment is unavailable on this runtime.
+    }
   }
 }
 
